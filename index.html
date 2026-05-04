@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Carousel Maker</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Fabric.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <style>
+        #workspace {
+            background-color: #f3f4f6;
+            background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb), 
+                              linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+        }
+        #workspace::-webkit-scrollbar { height: 12px; width: 12px; }
+        #workspace::-webkit-scrollbar-track { background: #f1f1f1; }
+        #workspace::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 6px; }
+        #workspace::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        
+        /* Tooltip style per i pallini */
+        .tool-btn { position: relative; }
+        .tool-btn:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 110%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="h-screen w-full flex flex-col font-sans overflow-hidden bg-gray-50">
+
+    <!-- Topbar Elegante -->
+    <header class="w-full bg-white shadow-sm border-b border-gray-200 flex items-center justify-between px-6 py-3 z-30 relative">
+        <!-- Sinistra: Titolo & Undo/Redo -->
+        <div class="flex items-center gap-4">
+            <h1 class="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-pink-500">Carousel<span class="text-gray-800">Maker</span></h1>
+            <div class="h-6 w-px bg-gray-300 mx-2"></div>
+            <button id="btn-undo" onclick="undo()" disabled class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 disabled:opacity-30 transition" title="Annulla">↩️</button>
+            <button id="btn-redo" onclick="redo()" disabled class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 disabled:opacity-30 transition" title="Ripeti">↪️</button>
+        </div>
+
+        <!-- Centro: Strumenti & Zoom -->
+        <div class="flex items-center gap-6">
+            
+            <!-- Sfondo -->
+            <div class="flex items-center">
+                <span class="text-sm font-semibold text-gray-700 mr-2">BG Color:</span>
+                <div class="relative flex items-center justify-center w-9 h-9 rounded-full border border-gray-300 overflow-hidden cursor-pointer shadow-sm hover:scale-105 transition" title="Colore di Sfondo">
+                    <div id="bg-color-icon" class="w-full h-full bg-white pointer-events-none"></div>
+                    <input type="color" id="bg-color" value="#ffffff" class="absolute opacity-0 w-16 h-16 cursor-pointer left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                </div>
+            </div>
+            
+            <div class="h-6 w-px bg-gray-200"></div>
+
+            <!-- Carica Immagini -->
+            <input type="file" id="image-upload" accept="image/*" class="hidden" multiple>
+            <button onclick="document.getElementById('image-upload').click()" class="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-5 rounded-full transition text-sm">
+                <span>🖼️</span> Carica Foto
+            </button>
+            
+            <div class="h-6 w-px bg-gray-200"></div>
+
+            <!-- Zoom -->
+            <div class="flex items-center gap-2 bg-gray-100 rounded-full px-2 py-1 shadow-inner">
+                <button onclick="zoomOut()" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm font-bold text-gray-600 transition">-</button>
+                <span id="zoom-level" class="text-xs font-bold w-12 text-center text-gray-700">100%</span>
+                <button onclick="zoomIn()" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm font-bold text-gray-600 transition">+</button>
+            </div>
+
+        </div>
+
+        <!-- Destra: Export & Trash -->
+        <div class="flex items-center gap-4">
+            <button onclick="deleteSelected()" class="w-10 h-10 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-full transition" title="Elimina Livello Selezionato (CANC)">🗑️</button>
+            <button onclick="exportCarousel()" class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold py-2 px-6 rounded-full shadow-md transition transform hover:-translate-y-0.5 text-sm">
+                Esporta Carousel
+            </button>
+        </div>
+    </header>
+
+    <!-- Area di Lavoro -->
+    <div id="workspace" class="flex-1 relative overflow-auto p-12 flex items-start justify-start">
+        
+        <!-- Wrapper per gestire lo zoom CSS e ospitare la toolbar -->
+        <div id="canvas-wrapper" class="origin-top-left shadow-2xl transition-transform duration-200 relative" style="width: 1080px; height: 1080px;">
+            <canvas id="canvas"></canvas>
+            
+            <!-- Pulsante Fluttuante Aggiungi Quadrato (+) -->
+            <button onclick="addSquare()" title="Aggiungi un Quadrato" class="absolute top-1/2 -right-20 transform -translate-y-1/2 w-14 h-14 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-3xl text-blue-600 hover:bg-blue-50 hover:scale-110 transition-all z-10 group">
+                +
+                <span id="square-badge" class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-sm group-hover:scale-110 transition">1</span>
+            </button>
+
+            <!-- Toolbar Fluttuante (I "Pallini") -->
+            <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200 transition-opacity" style="display: none; transform: translate(-100%, calc(-100% - 15px));">
+                
+                <!-- Strumenti Normali -->
+                <div id="normal-tools" class="flex gap-1 items-center">
+                    <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">✂️</button>
+                    <div class="w-px h-6 bg-gray-300 mx-1"></div>
+                    <button onclick="changeLayer('bottom')" data-tooltip="Sposta in fondo" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⏬</button>
+                    <button onclick="changeLayer('down')" data-tooltip="Sposta sotto" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⬇️</button>
+                    <button onclick="changeLayer('up')" data-tooltip="Sposta sopra" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⬆️</button>
+                    <button onclick="changeLayer('top')" data-tooltip="Sposta in cima" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⏫</button>
+                </div>
+
+                <!-- Strumenti Crop (Visibili solo durante il ritaglio) -->
+                <div id="crop-tools" class="hidden flex gap-2 items-center">
+                    <button onclick="applyCrop()" class="px-4 py-2 bg-green-500 text-white rounded-full hover:bg-green-600 font-bold text-sm shadow-md transition-colors">✓ Applica</button>
+                    <button onclick="cancelCrop()" class="px-4 py-2 bg-red-500 text-white rounded-full hover:bg-red-600 font-bold text-sm shadow-md transition-colors">✗ Annulla</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Costanti
+        const SQUARE_SIZE = 1080;
+        let squareCount = 1;
+        let guideLines = [];
+
+        // Variabili per Undo/Redo
+        let historyStack = [];
+        let historyIndex = -1;
+        let isHistoryAction = false;
+
+        // Variabili per Crop
+        let isCropping = false;
+        let cropRect = null;
+        let imgToCrop = null;
+
+        // Nuove variabili per Zoom
+        let currentZoom = 1;
+        const MAX_ZOOM = 3;
+        const MIN_ZOOM = 0.1;
+
+        // --- SISTEMA DI ROTAZIONE AVANZATO (Esterno agli angoli) ---
+        // Generiamo l'icona di rotazione SVG
+        const rotateIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l5.85 5.85'/%3E%3C/svg%3E";
+        const rotateImg = document.createElement('img');
+        rotateImg.src = rotateIcon;
+
+        // Funzione per disegnare il controllo rotazione
+        function renderRotateControl(ctx, left, top, styleOverride, fabricObject) {
+            const size = 16;
+            ctx.save();
+            ctx.translate(left, top);
+            ctx.drawImage(rotateImg, -size/2, -size/2, size, size);
+            ctx.restore();
+        }
+
+        // Impostazioni Globali di Fabric
+        fabric.Object.prototype.set({
+            transparentCorners: false,
+            cornerColor: '#3b82f6',
+            borderColor: '#3b82f6',
+            cornerSize: 12,
+            padding: 0,
+            cornerStyle: 'circle',
+            snapAngle: 5,       
+            snapThreshold: 5,
+            hasRotatingPoint: false // Nasconde l'astina predefinita
+        });
+
+        // Aggiunta dei 4 controlli di rotazione
+        const rotOffset = 22;
+        ['tl', 'tr', 'bl', 'br'].forEach(corner => {
+            let x = corner.includes('l') ? -0.5 : 0.5;
+            let y = corner.includes('t') ? -0.5 : 0.5;
+            fabric.Object.prototype.controls[corner + 'Rotate'] = new fabric.Control({
+                x: x, y: y,
+                offsetX: x * rotOffset, offsetY: y * rotOffset,
+                cursorStyle: 'alias',
+                actionHandler: fabric.controlsUtils.rotationWithSnapping,
+                actionName: 'rotate',
+                render: renderRotateControl,
+                cornerSize: 24,
+                withConnection: false
+            });
+        });
+
+        // Inizializzazione Canvas
+        const canvas = new fabric.Canvas('canvas', {
+            width: SQUARE_SIZE,
+            height: SQUARE_SIZE,
+            backgroundColor: '#ffffff',
+            preserveObjectStacking: true,
+            uniformScaling: false, 
+            uniScaleKey: 'shiftKey' 
+        });
+
+        // --- SISTEMA UNDO / REDO ---
+        function initHistory() {
+            historyStack = [];
+            historyIndex = -1;
+            saveState();
+        }
+
+        function saveState() {
+            if (isHistoryAction || isCropping) return;
+            historyStack = historyStack.slice(0, historyIndex + 1);
+            const json = canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']);
+            historyStack.push({
+                json: json,
+                squareCount: squareCount
+            });
+            historyIndex++;
+            updateUndoRedoUI();
+        }
+
+        function updateUndoRedoUI() {
+            document.getElementById('btn-undo').disabled = historyIndex <= 0;
+            document.getElementById('btn-redo').disabled = historyIndex >= historyStack.length - 1;
+        }
+
+        function undo() {
+            if (historyIndex > 0 && !isCropping) {
+                historyIndex--;
+                loadHistoryState(historyStack[historyIndex]);
+            }
+        }
+
+        function redo() {
+            if (historyIndex < historyStack.length - 1 && !isCropping) {
+                historyIndex++;
+                loadHistoryState(historyStack[historyIndex]);
+            }
+        }
+
+        function loadHistoryState(state) {
+            isHistoryAction = true;
+            canvas.loadFromJSON(state.json, function() {
+                squareCount = state.squareCount;
+                document.getElementById('square-badge').innerText = squareCount;
+                canvas.setWidth(SQUARE_SIZE * squareCount);
+                document.getElementById('canvas-wrapper').style.width = (SQUARE_SIZE * squareCount) + 'px';
+                guideLines = canvas.getObjects().filter(o => o.isGuideLine);
+                canvas.renderAll();
+                isHistoryAction = false;
+                updateUndoRedoUI();
+                updateToolbarPosition();
+            });
+        }
+
+        // Listener per auto-salvataggio history (ignorando linee guida e snap lines)
+        canvas.on('object:modified', saveState);
+        canvas.on('object:added', (e) => { 
+            if(!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState(); 
+        });
+        canvas.on('object:removed', (e) => { 
+            if(!isHistoryAction && !e.target.isCropRect && !e.target.isAlignmentLine) saveState(); 
+        });
+
+
+        // --- SISTEMA DI SMART GUIDES E SNAPPING CON "FANTASMA" ---
+        let currentSnapLines = [];
+        let pendingSnapMove = null;
+        let pendingSnapScale = null;
+        const SNAP_DISTANCE = 10;
+
+        function clearGuidelines() {
+            if (currentSnapLines.length > 0 || pendingSnapMove || pendingSnapScale) {
+                currentSnapLines = [];
+                pendingSnapMove = null;
+                pendingSnapScale = null;
+                canvas.renderAll();
+            }
+        }
+
+        function handleSnapping(e) {
+            const obj = e.target;
+            if (!obj || obj.isCropping) return;
+
+            // Se teniamo premuto ALT, saltiamo lo snapping
+            if (e.e.altKey) {
+                clearGuidelines();
+                return;
+            }
+
+            const action = e.transform ? e.transform.action : '';
+            const isMoving = action === 'drag';
+            const isScaling = action.includes('scale');
+
+            if (!isMoving && !isScaling) {
+                clearGuidelines();
+                return;
+            }
+
+            const objBounds = obj.getBoundingRect();
+            const objCenter = obj.getCenterPoint();
+
+            // Raccogliamo le coordinate degli altri oggetti
+            const targets = [];
+            canvas.getObjects().forEach(t => {
+                if (t === obj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
+                const bounds = t.getBoundingRect();
+                const center = t.getCenterPoint();
+                targets.push({
+                    left: bounds.left,
+                    centerX: center.x,
+                    right: bounds.left + bounds.width,
+                    top: bounds.top,
+                    centerY: center.y,
+                    bottom: bounds.top + bounds.height,
+                });
+            });
+
+            if (targets.length === 0) return;
+
+            let linesToDraw = [];
+
+            // LOGICA SNAP PER LO SPOSTAMENTO
+            if (isMoving) {
+                let snapX = null;
+                let snapY = null;
+                let diffX = SNAP_DISTANCE + 1;
+                let diffY = SNAP_DISTANCE + 1;
+                let finalLeft = obj.left;
+                let finalTop = obj.top;
+
+                targets.forEach(t => {
+                    // Controlli Orizzontali (X)
+                    const objXs = [
+                        { val: objBounds.left, type: 'left' },
+                        { val: objCenter.x, type: 'center' },
+                        { val: objBounds.left + objBounds.width, type: 'right' }
+                    ];
+                    const targetXs = [t.left, t.centerX, t.right];
+
+                    objXs.forEach(ox => {
+                        targetXs.forEach(tx => {
+                            if (Math.abs(ox.val - tx) < diffX) {
+                                diffX = Math.abs(ox.val - tx);
+                                snapX = tx;
+                                if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
+                                if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
+                                if (ox.type === 'right') finalLeft = obj.left + (tx - (objBounds.left + objBounds.width));
+                            }
+                        });
+                    });
+
+                    // Controlli Verticali (Y)
+                    const objYs = [
+                        { val: objBounds.top, type: 'top' },
+                        { val: objCenter.y, type: 'center' },
+                        { val: objBounds.top + objBounds.height, type: 'bottom' }
+                    ];
+                    const targetYs = [t.top, t.centerY, t.bottom];
+
+                    objYs.forEach(oy => {
+                        targetYs.forEach(ty => {
+                            if (Math.abs(oy.val - ty) < diffY) {
+                                diffY = Math.abs(oy.val - ty);
+                                snapY = ty;
+                                if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
+                                if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
+                                if (oy.type === 'bottom') finalTop = obj.top + (ty - (objBounds.top + objBounds.height));
+                            }
+                        });
+                    });
+                });
+
+                if (snapX !== null) {
+                    linesToDraw.push([snapX, -10000, snapX, 10000]);
+                }
+                if (snapY !== null) {
+                    linesToDraw.push([-10000, snapY, 10000, snapY]);
+                }
+
+                // Invece di spostare l'oggetto fisicamente, salviamo le coordinate in un fantasma
+                if (snapX !== null || snapY !== null) {
+                    pendingSnapMove = { left: finalLeft, top: finalTop };
+                } else {
+                    pendingSnapMove = null;
+                }
+            }
+
+            // LOGICA SNAP PER IL RIDIMENSIONAMENTO
+            if (isScaling) {
+                let activeCorner = e.transform.corner;
+                let scaleSnapX = null;
+                let scaleSnapY = null;
+                let sDiffX = SNAP_DISTANCE + 1;
+                let sDiffY = SNAP_DISTANCE + 1;
+
+                targets.forEach(t => {
+                    const targetXs = [t.left, t.centerX, t.right];
+                    const targetYs = [t.top, t.centerY, t.bottom];
+
+                    if(activeCorner.includes('l')) {
+                        targetXs.forEach(tx => { if(Math.abs(objBounds.left - tx) < sDiffX) { sDiffX = Math.abs(objBounds.left - tx); scaleSnapX = tx; } });
+                    } else if(activeCorner.includes('r')) {
+                        targetXs.forEach(tx => { if(Math.abs((objBounds.left + objBounds.width) - tx) < sDiffX) { sDiffX = Math.abs((objBounds.left + objBounds.width) - tx); scaleSnapX = tx; } });
+                    }
+
+                    if(activeCorner.includes('t')) {
+                        targetYs.forEach(ty => { if(Math.abs(objBounds.top - ty) < sDiffY) { sDiffY = Math.abs(objBounds.top - ty); scaleSnapY = ty; } });
+                    } else if(activeCorner.includes('b')) {
+                        targetYs.forEach(ty => { if(Math.abs((objBounds.top + objBounds.height) - ty) < sDiffY) { sDiffY = Math.abs((objBounds.top + objBounds.height) - ty); scaleSnapY = ty; } });
+                    }
+                });
+
+                if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, -10000, scaleSnapX, 10000]);
+                if (scaleSnapY !== null) linesToDraw.push([-10000, scaleSnapY, 10000, scaleSnapY]);
+
+                let finalScaleX = obj.scaleX;
+                let finalScaleY = obj.scaleY;
+                let willSnapScale = false;
+
+                // Calcoliamo la proiezione del ridimensionamento (snap) solo se NON stiamo usando Shift
+                if (!e.e.shiftKey) {
+                    if (scaleSnapX !== null && activeCorner.includes('r')) {
+                        let desiredWidth = scaleSnapX - objBounds.left;
+                        if(desiredWidth > 0) {
+                            finalScaleX = desiredWidth / obj.width;
+                            willSnapScale = true;
+                        }
+                    }
+                    if (scaleSnapY !== null && activeCorner.includes('b')) {
+                        let desiredHeight = scaleSnapY - objBounds.top;
+                        if(desiredHeight > 0) {
+                            finalScaleY = desiredHeight / obj.height;
+                            willSnapScale = true;
+                        }
+                    }
+                }
+
+                if (willSnapScale) {
+                    pendingSnapScale = { scaleX: finalScaleX, scaleY: finalScaleY };
+                } else {
+                    pendingSnapScale = null;
+                }
+            }
+
+            // Memorizza le coordinate delle linee da disegnare
+            currentSnapLines = linesToDraw;
+        }
+
+        // Collega gli eventi al canvas
+        canvas.on('object:moving', handleSnapping);
+        canvas.on('object:scaling', handleSnapping);
+        
+        // Applica definitivamente lo snap quando il mouse viene rilasciato
+        canvas.on('mouse:up', function(e) {
+            const obj = canvas.getActiveObject();
+            let didSnap = false;
+
+            if (obj && pendingSnapMove) {
+                obj.set({ left: pendingSnapMove.left, top: pendingSnapMove.top });
+                obj.setCoords();
+                didSnap = true;
+            }
+
+            if (obj && pendingSnapScale) {
+                obj.set({ scaleX: pendingSnapScale.scaleX, scaleY: pendingSnapScale.scaleY });
+                obj.setCoords();
+                didSnap = true;
+            }
+
+            clearGuidelines(); // Pulisce i fantasmi e le linee
+
+            if (didSnap) {
+                canvas.renderAll();
+                // Il saveState viene gestito automaticamente da 'object:modified' che scatta subito dopo!
+            }
+        });
+
+        // Disegna Guide + Fantasmi alla fine di ogni render 
+        canvas.on('after:render', function() {
+            if (currentSnapLines.length === 0 && !pendingSnapMove && !pendingSnapScale) return;
+
+            const ctx = canvas.contextContainer;
+            ctx.save();
+            
+            // Applica lo zoom e il pan attuale del canvas per allineare i disegni grafici
+            const vpt = canvas.viewportTransform;
+            ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
+            
+            // 1. Disegna le linee di snap
+            if (currentSnapLines.length > 0) {
+                ctx.beginPath();
+                ctx.strokeStyle = '#ec4899';
+                ctx.lineWidth = 1.5 / canvas.getZoom();
+                ctx.setLineDash([5 / canvas.getZoom(), 5 / canvas.getZoom()]);
+                
+                currentSnapLines.forEach(coords => {
+                    ctx.moveTo(coords[0], coords[1]);
+                    ctx.lineTo(coords[2], coords[3]);
+                });
+                ctx.stroke();
+            }
+
+            // 2. Disegna il "Fantasma" Trasparente per lo Spostamento
+            if (pendingSnapMove) {
+                const obj = canvas.getActiveObject();
+                if (obj) {
+                    ctx.save();
+                    ctx.translate(pendingSnapMove.left, pendingSnapMove.top);
+                    ctx.rotate(obj.angle * Math.PI / 180);
+
+                    const w = obj.width * obj.scaleX;
+                    const h = obj.height * obj.scaleY;
+                    const offsetX = obj.originX === 'center' ? -w/2 : 0;
+                    const offsetY = obj.originY === 'center' ? -h/2 : 0;
+
+                    ctx.fillStyle = 'rgba(236, 72, 153, 0.15)'; // Rosa trasparente
+                    ctx.strokeStyle = '#ec4899'; // Rosa accesso
+                    ctx.lineWidth = 2 / canvas.getZoom();
+                    ctx.setLineDash([6 / canvas.getZoom(), 4 / canvas.getZoom()]);
+                    
+                    ctx.fillRect(offsetX, offsetY, w, h);
+                    ctx.strokeRect(offsetX, offsetY, w, h);
+                    ctx.restore();
+                }
+            }
+
+            // 3. Disegna il "Fantasma" Trasparente per il Ridimensionamento
+            if (pendingSnapScale) {
+                const obj = canvas.getActiveObject();
+                if (obj) {
+                    ctx.save();
+                    ctx.translate(obj.left, obj.top);
+                    ctx.rotate(obj.angle * Math.PI / 180);
+
+                    const w = obj.width * pendingSnapScale.scaleX;
+                    const h = obj.height * pendingSnapScale.scaleY;
+                    const offsetX = obj.originX === 'center' ? -w/2 : 0;
+                    const offsetY = obj.originY === 'center' ? -h/2 : 0;
+
+                    ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'; // Blu trasparente
+                    ctx.strokeStyle = '#3b82f6';
+                    ctx.lineWidth = 2 / canvas.getZoom();
+                    ctx.setLineDash([6 / canvas.getZoom(), 4 / canvas.getZoom()]);
+                    
+                    ctx.fillRect(offsetX, offsetY, w, h);
+                    ctx.strokeRect(offsetX, offsetY, w, h);
+                    ctx.restore();
+                }
+            }
+
+            ctx.restore();
+        });
+
+
+        // --- SISTEMA ZOOM ---
+        function initZoom() {
+            currentZoom = 0.7; // Partiamo con uno zoom fisso del 70%
+            applyZoom();
+        }
+
+        function applyZoom() {
+            const wrapper = document.getElementById('canvas-wrapper');
+            wrapper.style.transform = `scale(${currentZoom})`;
+            document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
+            wrapper.style.width = (SQUARE_SIZE * squareCount) + 'px';
+            wrapper.style.height = SQUARE_SIZE + 'px';
+        }
+
+        function zoomIn() {
+            if(currentZoom < MAX_ZOOM) { currentZoom += 0.1; applyZoom(); }
+        }
+
+        function zoomOut() {
+            if(currentZoom > MIN_ZOOM) { currentZoom -= 0.1; applyZoom(); }
+        }
+
+        document.getElementById('workspace').addEventListener('wheel', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                if (e.deltaY < 0) zoomIn();
+                else zoomOut();
+            }
+        }, { passive: false });
+
+        initZoom();
+
+        // --- TOOLBAR FLUTTUANTE (PALLINI) ---
+        function updateToolbarPosition() {
+            const activeObj = canvas.getActiveObject();
+            const toolbar = document.getElementById('floating-toolbar');
+            
+            if (!activeObj || activeObj.isAlignmentLine) {
+                toolbar.style.display = 'none';
+                return;
+            }
+
+            toolbar.style.display = 'flex';
+            
+            const boundingRect = activeObj.getBoundingRect();
+            
+            // Posiziona in ALTO A DESTRA rispetto alla bounding box dell'oggetto
+            toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
+            toolbar.style.top = boundingRect.top + 'px';
+        }
+
+        canvas.on('selection:created', updateToolbarPosition);
+        canvas.on('selection:updated', updateToolbarPosition);
+        canvas.on('selection:cleared', updateToolbarPosition);
+        canvas.on('object:moving', updateToolbarPosition);
+        canvas.on('object:scaling', updateToolbarPosition);
+        canvas.on('object:rotating', updateToolbarPosition);
+
+        // --- GESTIONE LIVELLI (Z-INDEX) ---
+        function bringGuidesToFront() {
+            canvas.getObjects().forEach(obj => {
+                if(obj.isGuideLine) canvas.bringToFront(obj);
+            });
+        }
+
+        function changeLayer(action) {
+            const obj = canvas.getActiveObject();
+            if(!obj || isCropping) return;
+
+            if(action === 'bottom') canvas.sendToBack(obj);
+            if(action === 'down') canvas.sendBackwards(obj);
+            if(action === 'up') canvas.bringForward(obj);
+            if(action === 'top') canvas.bringToFront(obj);
+            
+            bringGuidesToFront();
+            canvas.renderAll();
+            saveState();
+        }
+
+        // --- FUNZIONE RITAGLIO (CROP) ---
+        function startCrop() {
+            imgToCrop = canvas.getActiveObject();
+            if (!imgToCrop || imgToCrop.type !== 'image') {
+                alert("Puoi ritagliare solo le immagini.");
+                return;
+            }
+
+            if (imgToCrop.angle !== 0) {
+                imgToCrop.set('angle', 0);
+                canvas.renderAll();
+            }
+
+            isCropping = true;
+
+            cropRect = new fabric.Rect({
+                left: imgToCrop.left,
+                top: imgToCrop.top,
+                width: imgToCrop.getScaledWidth(),
+                height: imgToCrop.getScaledHeight(),
+                fill: 'rgba(0, 0, 0, 0.4)',
+                stroke: '#ef4444',
+                strokeWidth: 2,
+                strokeDashArray: [5, 5],
+                cornerColor: '#ef4444',
+                borderColor: '#ef4444',
+                cornerSize: 12,
+                transparentCorners: false,
+                hasRotatingPoint: false,
+                lockRotation: true,
+                isCropRect: true
+            });
+
+            // Spegniamo le maniglie di rotazione per il rettangolo di crop
+            cropRect.setControlsVisibility({
+                tlRotate: false, trRotate: false, blRotate: false, brRotate: false
+            });
+
+            canvas.add(cropRect);
+            canvas.setActiveObject(cropRect);
+            
+            imgToCrop.selectable = false;
+            imgToCrop.evented = false;
+
+            document.getElementById('normal-tools').classList.add('hidden');
+            document.getElementById('crop-tools').classList.remove('hidden');
+            updateToolbarPosition();
+        }
+
+        function applyCrop() {
+            if (!isCropping || !cropRect || !imgToCrop) return;
+
+            let scaleX = imgToCrop.scaleX;
+            let scaleY = imgToCrop.scaleY;
+
+            let currentCropX = imgToCrop.cropX || 0;
+            let currentCropY = imgToCrop.cropY || 0;
+
+            let leftOffset = cropRect.left - imgToCrop.left;
+            let topOffset = cropRect.top - imgToCrop.top;
+
+            let newCropX = currentCropX + (leftOffset / scaleX);
+            let newCropY = currentCropY + (topOffset / scaleY);
+            let newWidth = cropRect.getScaledWidth() / scaleX;
+            let newHeight = cropRect.getScaledHeight() / scaleY;
+
+            imgToCrop.set({
+                cropX: newCropX,
+                cropY: newCropY,
+                width: newWidth,
+                height: newHeight,
+                left: cropRect.left,
+                top: cropRect.top,
+                selectable: true,
+                evented: true
+            });
+
+            canvas.remove(cropRect);
+            isCropping = false;
+            cropRect = null;
+            
+            document.getElementById('normal-tools').classList.remove('hidden');
+            document.getElementById('crop-tools').classList.add('hidden');
+            
+            canvas.setActiveObject(imgToCrop);
+            canvas.renderAll();
+            saveState();
+        }
+
+        function cancelCrop() {
+            if (!isCropping) return;
+            
+            canvas.remove(cropRect);
+            imgToCrop.selectable = true;
+            imgToCrop.evented = true;
+            
+            isCropping = false;
+            cropRect = null;
+            
+            document.getElementById('normal-tools').classList.remove('hidden');
+            document.getElementById('crop-tools').classList.add('hidden');
+            
+            canvas.setActiveObject(imgToCrop);
+            canvas.renderAll();
+        }
+
+        // --- ALTRE FUNZIONI ---
+        document.getElementById('bg-color').addEventListener('input', function(e) {
+            const color = e.target.value;
+            document.getElementById('bg-color-icon').style.backgroundColor = color;
+            canvas.backgroundColor = color;
+            canvas.renderAll();
+        });
+        
+        document.getElementById('bg-color').addEventListener('change', function() {
+            saveState();
+        });
+
+        function addSquare() {
+            squareCount++;
+            document.getElementById('square-badge').innerText = squareCount;
+            canvas.setWidth(SQUARE_SIZE * squareCount);
+            
+            document.getElementById('canvas-wrapper').style.width = (SQUARE_SIZE * squareCount) + 'px';
+            
+            const lineX = SQUARE_SIZE * (squareCount - 1);
+            const line = new fabric.Line([lineX, 0, lineX, SQUARE_SIZE], {
+                stroke: 'rgba(0,0,0,0.4)',
+                strokeWidth: 2,
+                strokeDashArray: [15, 15],
+                selectable: false,
+                evented: false,
+                isGuideLine: true
+            });
+            
+            guideLines.push(line);
+            canvas.add(line);
+            line.bringToFront();
+            canvas.renderAll();
+            saveState();
+        }
+
+        document.getElementById('image-upload').addEventListener('change', function(e) {
+            const files = e.target.files;
+            if (!files.length) return;
+
+            for(let i = 0; i < files.length; i++) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    fabric.Image.fromURL(event.target.result, function(img) {
+                        if(img.width > SQUARE_SIZE) img.scaleToWidth(SQUARE_SIZE * 0.8);
+                        
+                        img.set({
+                            left: (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
+                            top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2),
+                        });
+                        
+                        canvas.add(img);
+                        canvas.setActiveObject(img);
+                    });
+                };
+                reader.readAsDataURL(files[i]);
+            }
+            e.target.value = '';
+        });
+
+        function deleteSelected() {
+            if (isCropping) return;
+            const activeObjects = canvas.getActiveObjects();
+            if (activeObjects.length) {
+                canvas.discardActiveObject();
+                activeObjects.forEach(function(object) {
+                    canvas.remove(object);
+                });
+            }
+        }
+
+        window.addEventListener('keydown', function(e) {
+            // Evita di scatenare shortcut se stiamo scrivendo in un campo di testo
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            // Elimina Livello
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                deleteSelected();
+            }
+            
+            // Undo: Ctrl+Z o Cmd+Z (Senza Shift)
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                undo();
+            }
+            
+            // Redo: Ctrl+Shift+Z o Cmd+Shift+Z (o anche Ctrl+Y)
+            if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) {
+                e.preventDefault();
+                redo();
+            }
+
+            // Z-index Up: Ctrl + "+" o "="
+            if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
+                e.preventDefault();
+                changeLayer('up');
+            }
+            
+            // Z-index Down: Ctrl + "-"
+            if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+                e.preventDefault();
+                changeLayer('down');
+            }
+        });
+
+        function exportCarousel() {
+            guideLines.forEach(line => line.set('opacity', 0));
+            canvas.discardActiveObject();
+            canvas.renderAll();
+
+            for (let i = 0; i < squareCount; i++) {
+                const dataURL = canvas.toDataURL({
+                    format: 'jpeg',
+                    quality: 1,
+                    left: i * SQUARE_SIZE,
+                    top: 0,
+                    width: SQUARE_SIZE,
+                    height: SQUARE_SIZE
+                });
+
+                const link = document.createElement('a');
+                link.download = `carousel-slide-${i + 1}.jpg`;
+                link.href = dataURL;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+
+            guideLines.forEach(line => line.set('opacity', 1));
+            canvas.renderAll();
+        }
+
+        // Setup iniziale Undo
+        initHistory();
+
+    </script>
+</body>
+</html>
