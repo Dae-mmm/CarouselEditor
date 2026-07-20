@@ -116,6 +116,12 @@
             background: var(--brand);
         }
 
+        .aspect-btn.is-active {
+            background: #fff;
+            color: #4f46e5;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+        }
+
         /* Ghost pagina durante drag */
         #page-ghost {
             display: none;
@@ -225,8 +231,13 @@
         </p>
     </header>
 
-    <!-- Indicatori pagine (solo navigazione) -->
+    <!-- Indicatori pagine + formato -->
     <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
+        <div id="aspect-toggle" class="inline-flex items-center bg-gray-100 rounded-full p-0.5" role="group" aria-label="Formato pagina">
+            <button type="button" data-aspect="3:4" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition">3:4</button>
+            <button type="button" data-aspect="1:1" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition is-active">1:1</button>
+            <button type="button" data-aspect="4:3" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition">4:3</button>
+        </div>
         <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
         <div class="flex items-center gap-3 text-xs text-gray-500">
             <span id="page-label" class="font-semibold text-gray-700">Pagina 1 / 1</span>
@@ -237,7 +248,7 @@
     <!-- Area di Lavoro centrata -->
     <div id="workspace" class="flex-1 relative overflow-auto">
         <div id="canvas-stage" class="relative">
-            <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1350px; height: 1350px;">
+            <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
                 <canvas id="canvas"></canvas>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
@@ -300,12 +311,20 @@
     <div id="page-ghost"><img alt=""></div>
 
     <script>
-        const SQUARE_SIZE = 1350;
+        // Formati pagina: 1:1 = 1080²; 4:3 / 3:4 con lato lungo 1350
+        const ASPECT_PRESETS = {
+            '3:4': { w: 1013, h: 1350 },
+            '1:1': { w: 1080, h: 1080 },
+            '4:3': { w: 1350, h: 1013 }
+        };
         const MAX_IMAGE_SHORT_SIDE = 1350;
-        const STORAGE_KEY = 'carousel-maker-project-v2';
+        const STORAGE_KEY = 'carousel-maker-project-v3';
         const LONG_PRESS_MS = 1000;
         const LONG_PRESS_MOVE_TOL = 14;
 
+        let aspectRatio = '1:1';
+        let pageW = ASPECT_PRESETS['1:1'].w;
+        let pageH = ASPECT_PRESETS['1:1'].h;
         let squareCount = 1;
         let guideLines = [];
 
@@ -406,8 +425,8 @@
         });
 
         const canvas = new fabric.Canvas('canvas', {
-            width: SQUARE_SIZE,
-            height: SQUARE_SIZE,
+            width: pageW,
+            height: pageH,
             backgroundColor: '#ffffff',
             preserveObjectStacking: true,
             uniformScaling: false,
@@ -467,7 +486,7 @@
             if (isHistoryAction || isCropping || pageDrag.active) return;
             historyStack = historyStack.slice(0, historyIndex + 1);
             const json = canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']);
-            historyStack.push({ json, squareCount });
+            historyStack.push({ json, squareCount, aspectRatio });
             historyIndex++;
             updateUndoRedoUI();
             persistProject();
@@ -494,11 +513,19 @@
 
         function loadHistoryState(state) {
             isHistoryAction = true;
+            if (state.aspectRatio && ASPECT_PRESETS[state.aspectRatio]) {
+                aspectRatio = state.aspectRatio;
+                pageW = ASPECT_PRESETS[aspectRatio].w;
+                pageH = ASPECT_PRESETS[aspectRatio].h;
+                updateAspectToggleUI();
+            }
             canvas.loadFromJSON(state.json, function() {
                 squareCount = state.squareCount;
                 document.getElementById('square-badge').innerText = squareCount;
-                canvas.setWidth(SQUARE_SIZE * squareCount);
-                document.getElementById('canvas-wrapper').style.width = (SQUARE_SIZE * squareCount) + 'px';
+                canvas.setWidth(pageW * squareCount);
+                canvas.setHeight(pageH);
+                document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
+                document.getElementById('canvas-wrapper').style.height = pageH + 'px';
                 guideLines = canvas.getObjects().filter(o => o.isGuideLine);
                 canvas.renderAll();
                 isHistoryAction = false;
@@ -709,40 +736,37 @@
             const wrapper = document.getElementById('canvas-wrapper');
             wrapper.style.transform = `scale(${currentZoom})`;
             document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
-            wrapper.style.width = (SQUARE_SIZE * squareCount) + 'px';
-            wrapper.style.height = SQUARE_SIZE + 'px';
+            wrapper.style.width = (pageW * squareCount) + 'px';
+            wrapper.style.height = pageH + 'px';
             centerStagePadding();
         }
 
         function centerStagePadding() {
             const workspace = document.getElementById('workspace');
             const stage = document.getElementById('canvas-stage');
-            const pageW = SQUARE_SIZE * currentZoom;
-            const pageH = SQUARE_SIZE * currentZoom;
-            const totalW = pageW * squareCount;
-            const padX = Math.max(16, (workspace.clientWidth - pageW) / 2);
-            const padY = Math.max(16, (workspace.clientHeight - pageH) / 2);
-            // Larghezza stage = padding*2 + contenuto scalato (il wrapper ha width logica, scale riduce visual)
+            const scaledW = pageW * currentZoom;
+            const scaledH = pageH * currentZoom;
+            const totalW = scaledW * squareCount;
+            const padX = Math.max(16, (workspace.clientWidth - scaledW) / 2);
+            const padY = Math.max(16, (workspace.clientHeight - scaledH) / 2);
             stage.style.paddingLeft = padX + 'px';
             stage.style.paddingRight = padX + 'px';
             stage.style.paddingTop = padY + 'px';
             stage.style.paddingBottom = padY + 'px';
-            // Il canvas-wrapper occupa space pre-scale; per lo scroll corretto usiamo un spacer visuale
             stage.style.width = (totalW + padX * 2) + 'px';
-            stage.style.minHeight = (pageH + padY * 2) + 'px';
-            // Compensa il fatto che scale non riduce il layout flow: riduci con negative margin trick
+            stage.style.minHeight = (scaledH + padY * 2) + 'px';
             const wrapper = document.getElementById('canvas-wrapper');
-            const layoutW = SQUARE_SIZE * squareCount;
-            const layoutH = SQUARE_SIZE;
+            const layoutW = pageW * squareCount;
+            const layoutH = pageH;
             wrapper.style.marginRight = (totalW - layoutW) + 'px';
-            wrapper.style.marginBottom = (pageH - layoutH) + 'px';
+            wrapper.style.marginBottom = (scaledH - layoutH) + 'px';
         }
 
         function fitToScreen() {
             const workspace = document.getElementById('workspace');
             const availW = Math.max(120, workspace.clientWidth - 32);
             const availH = Math.max(120, workspace.clientHeight - 32);
-            currentZoom = Math.min(availW / SQUARE_SIZE, availH / SQUARE_SIZE, 1);
+            currentZoom = Math.min(availW / pageW, availH / pageH, 1);
             currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom));
             applyZoom();
             scrollToPage(currentVisiblePage, false);
@@ -908,7 +932,7 @@
         // --- PAGINE ---
         function getObjectPageIndex(obj) {
             const left = typeof obj.left === 'number' ? obj.left : 0;
-            let page = Math.floor(left / SQUARE_SIZE);
+            let page = Math.floor(left / pageW);
             if (page < 0) page = 0;
             if (page >= squareCount) page = squareCount - 1;
             return page;
@@ -920,8 +944,8 @@
             [...guideLines].forEach(line => canvas.remove(line));
             guideLines = [];
             for (let i = 1; i < squareCount; i++) {
-                const lineX = SQUARE_SIZE * i;
-                const line = new fabric.Line([lineX, 0, lineX, SQUARE_SIZE], {
+                const lineX = pageW * i;
+                const line = new fabric.Line([lineX, 0, lineX, pageH], {
                     stroke: 'rgba(0,0,0,0.35)',
                     strokeWidth: 2,
                     strokeDashArray: [15, 15],
@@ -938,11 +962,66 @@
 
         function syncCanvasSize() {
             document.getElementById('square-badge').innerText = squareCount;
-            canvas.setWidth(SQUARE_SIZE * squareCount);
-            document.getElementById('canvas-wrapper').style.width = (SQUARE_SIZE * squareCount) + 'px';
+            canvas.setWidth(pageW * squareCount);
+            canvas.setHeight(pageH);
+            document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
+            document.getElementById('canvas-wrapper').style.height = pageH + 'px';
             rebuildGuideLines();
             applyZoom();
             renderPagesUI();
+        }
+
+        function updateAspectToggleUI() {
+            document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
+                btn.classList.toggle('is-active', btn.dataset.aspect === aspectRatio);
+            });
+        }
+
+        /**
+         * Cambia formato pagina (3:4 / 1:1 / 4:3).
+         * Rimappa posizione e scala degli oggetti rispetto alle nuove dimensioni.
+         */
+        function setAspectRatio(next) {
+            if (!ASPECT_PRESETS[next] || isCropping || pageDrag.active || pinchGesture.active) return;
+            if (next === aspectRatio) {
+                updateAspectToggleUI();
+                return;
+            }
+
+            const oldW = pageW;
+            const oldH = pageH;
+            aspectRatio = next;
+            pageW = ASPECT_PRESETS[next].w;
+            pageH = ASPECT_PRESETS[next].h;
+            updateAspectToggleUI();
+
+            const sx = pageW / oldW;
+            const sy = pageH / oldH;
+            const scale = Math.min(sx, sy);
+
+            isHistoryAction = true;
+            canvas.getObjects().forEach(obj => {
+                if (obj.isGuideLine || obj.isAlignmentLine || obj.isCropRect) return;
+                let page = Math.floor(obj.left / oldW);
+                if (page < 0) page = 0;
+                if (page >= squareCount) page = squareCount - 1;
+                const offsetX = obj.left - page * oldW;
+                const offsetY = obj.top || 0;
+                obj.set({
+                    left: page * pageW + offsetX * sx,
+                    top: offsetY * sy,
+                    scaleX: (obj.scaleX || 1) * scale,
+                    scaleY: (obj.scaleY || 1) * scale
+                });
+                obj.setCoords();
+            });
+            isHistoryAction = false;
+
+            syncCanvasSize();
+            canvas.discardActiveObject();
+            canvas.renderAll();
+            fitToScreen();
+            saveState();
         }
 
         function movePage(fromIndex, toIndex) {
@@ -956,7 +1035,7 @@
 
             const snapshots = content.map(obj => {
                 const page = getObjectPageIndex(obj);
-                return { obj, page, offsetX: obj.left - page * SQUARE_SIZE, top: obj.top };
+                return { obj, page, offsetX: obj.left - page * pageW, top: obj.top };
             });
 
             const order = Array.from({ length: squareCount }, (_, i) => i);
@@ -967,7 +1046,7 @@
             order.forEach((oldIdx, newIdx) => { newIndexOf[oldIdx] = newIdx; });
 
             snapshots.forEach(({ obj, page, offsetX, top }) => {
-                obj.set({ left: newIndexOf[page] * SQUARE_SIZE + offsetX, top });
+                obj.set({ left: newIndexOf[page] * pageW + offsetX, top });
                 obj.setCoords();
             });
 
@@ -996,7 +1075,7 @@
                 const page = getObjectPageIndex(obj);
                 if (page === index) canvas.remove(obj);
                 else if (page > index) {
-                    obj.set({ left: obj.left - SQUARE_SIZE });
+                    obj.set({ left: obj.left - pageW });
                     obj.setCoords();
                 }
             });
@@ -1034,7 +1113,7 @@
             const workspace = document.getElementById('workspace');
             const stage = document.getElementById('canvas-stage');
             const padX = parseFloat(stage.style.paddingLeft) || 0;
-            const target = padX + index * SQUARE_SIZE * currentZoom - (workspace.clientWidth - SQUARE_SIZE * currentZoom) / 2;
+            const target = padX + index * pageW * currentZoom - (workspace.clientWidth - pageW * currentZoom) / 2;
             workspace.scrollTo({
                 left: Math.max(0, target),
                 behavior: smooth ? 'smooth' : 'auto'
@@ -1047,7 +1126,7 @@
             const stage = document.getElementById('canvas-stage');
             const padX = parseFloat(stage.style.paddingLeft) || 0;
             const centerX = workspace.scrollLeft + workspace.clientWidth / 2 - padX;
-            const page = Math.round(centerX / (SQUARE_SIZE * currentZoom) - 0.5);
+            const page = Math.round(centerX / (pageW * currentZoom) - 0.5);
             const clamped = Math.max(0, Math.min(squareCount - 1, page));
             if (clamped !== currentVisiblePage) {
                 currentVisiblePage = clamped;
@@ -1109,10 +1188,10 @@
 
             const dataURL = canvas.toDataURL({
                 format: 'png',
-                left: pageIndex * SQUARE_SIZE,
+                left: pageIndex * pageW,
                 top: 0,
-                width: SQUARE_SIZE,
-                height: SQUARE_SIZE,
+                width: pageW,
+                height: pageH,
                 enableRetinaScaling: false
             });
 
@@ -1163,10 +1242,9 @@
             setOwnedObjectsLifted(fromIndex, true);
 
             const ghost = document.getElementById('page-ghost');
-            const size = Math.min(200, Math.max(120, SQUARE_SIZE * currentZoom * 0.45));
-            pageDrag.ghostSize = size;
-            ghost.style.width = size + 'px';
-            ghost.style.height = size + 'px';
+            const ghostScale = Math.min(200 / pageW, 200 / pageH, currentZoom * 0.5);
+            ghost.style.width = Math.round(pageW * ghostScale) + 'px';
+            ghost.style.height = Math.round(pageH * ghostScale) + 'px';
             ghost.querySelector('img').src = dataURL;
             ghost.classList.add('show');
             ghost.style.left = clientX + 'px';
@@ -1174,8 +1252,8 @@
 
             // Evidenzia lo slot vuoto della pagina (senza coprire elementi vicini)
             const dim = document.getElementById('page-drag-dim');
-            dim.style.left = (fromIndex * SQUARE_SIZE) + 'px';
-            dim.style.width = SQUARE_SIZE + 'px';
+            dim.style.left = (fromIndex * pageW) + 'px';
+            dim.style.width = pageW + 'px';
             dim.classList.add('show');
 
             if (navigator.vibrate) navigator.vibrate(25);
@@ -1189,7 +1267,7 @@
             // x in coordinate canvas non scalate
             const xCanvas = (clientX - rect.left) / currentZoom;
             // slot: 0 prima della prima, ..., squareCount dopo l'ultima
-            let slot = Math.round(xCanvas / SQUARE_SIZE);
+            let slot = Math.round(xCanvas / pageW);
             slot = Math.max(0, Math.min(squareCount, slot));
             return slot;
         }
@@ -1203,7 +1281,7 @@
             pageDrag.insertAt = slot;
 
             const line = document.getElementById('page-insert-line');
-            line.style.left = (slot * SQUARE_SIZE) + 'px';
+            line.style.left = (slot * pageW) + 'px';
             line.classList.add('show');
         }
 
@@ -1257,7 +1335,7 @@
 
             const pt = clientPoint(opt.e);
             const pointer = canvas.getPointer(opt.e);
-            const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / SQUARE_SIZE)));
+            const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / pageW)));
 
             pageDrag.armed = true;
             pageDrag.startClientX = pt.x;
@@ -1474,7 +1552,7 @@
         document.getElementById('image-upload').addEventListener('change', async function(e) {
             const files = e.target.files;
             if (!files.length) return;
-            const baseLeft = currentVisiblePage * SQUARE_SIZE;
+            const baseLeft = currentVisiblePage * pageW;
             const fileList = Array.from(files);
             e.target.value = '';
 
@@ -1485,12 +1563,12 @@
                         fabric.Image.fromURL(dataURL, function(img) {
                             // Adatta in pagina senza superare ~90% del quadrato
                             const maxDim = Math.max(img.width, img.height);
-                            const fit = (SQUARE_SIZE * 0.9) / maxDim;
+                            const fit = (Math.min(pageW, pageH) * 0.9) / maxDim;
                             if (fit < 1) img.scale(fit);
 
                             img.set({
-                                left: baseLeft + (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
-                                top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2)
+                                left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
+                                top: (pageH / 2) - (img.getScaledHeight() / 2)
                             });
                             canvas.add(img);
                             canvas.setActiveObject(img);
@@ -1567,7 +1645,7 @@
             for (let i = 0; i < squareCount; i++) {
                 const dataURL = canvas.toDataURL({
                     format: 'jpeg', quality: 1,
-                    left: i * SQUARE_SIZE, top: 0, width: SQUARE_SIZE, height: SQUARE_SIZE
+                    left: i * pageW, top: 0, width: pageW, height: pageH
                 });
                 const link = document.createElement('a');
                 link.download = `carousel-slide-${i + 1}.jpg`;
@@ -1585,6 +1663,7 @@
             try {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify({
                     squareCount,
+                    aspectRatio,
                     backgroundColor: canvas.backgroundColor,
                     json: canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']),
                     savedAt: Date.now()
@@ -1603,6 +1682,12 @@
                 isHistoryAction = true;
                 canvas.loadFromJSON(payload.json, function() {
                     squareCount = payload.squareCount || 1;
+                    if (payload.aspectRatio && ASPECT_PRESETS[payload.aspectRatio]) {
+                        aspectRatio = payload.aspectRatio;
+                        pageW = ASPECT_PRESETS[aspectRatio].w;
+                        pageH = ASPECT_PRESETS[aspectRatio].h;
+                        updateAspectToggleUI();
+                    }
                     if (payload.backgroundColor) {
                         canvas.backgroundColor = payload.backgroundColor;
                         document.getElementById('bg-color').value = payload.backgroundColor;
@@ -1669,6 +1754,10 @@
 
         // --- BOOT ---
         updateMobileHint();
+        updateAspectToggleUI();
+        document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
+            btn.addEventListener('click', () => setAspectRatio(btn.dataset.aspect));
+        });
         renderPagesUI();
         if (!restoreProject()) {
             initHistory();
