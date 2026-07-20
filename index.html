@@ -237,7 +237,7 @@
     <!-- Area di Lavoro centrata -->
     <div id="workspace" class="flex-1 relative overflow-auto">
         <div id="canvas-stage" class="relative">
-            <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
+            <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1350px; height: 1350px;">
                 <canvas id="canvas"></canvas>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
@@ -300,8 +300,9 @@
     <div id="page-ghost"><img alt=""></div>
 
     <script>
-        const SQUARE_SIZE = 1080;
-        const STORAGE_KEY = 'carousel-maker-project-v1';
+        const SQUARE_SIZE = 1350;
+        const MAX_IMAGE_SHORT_SIDE = 1350;
+        const STORAGE_KEY = 'carousel-maker-project-v2';
         const LONG_PRESS_MS = 1000;
         const LONG_PRESS_MOVE_TOL = 14;
 
@@ -1422,12 +1423,6 @@
                     e.preventDefault();
                     e.stopPropagation();
                 }
-                return;
-            }
-
-            // Un dito: se c'è selezione e tocchiamo l'oggetto, nessun long-press pagina
-            if (e.touches.length === 1 && canvas.getActiveObject() && !isBackgroundTarget(canvas.findTarget(e, false))) {
-                cancelLongPressArm();
             }
         }, { passive: false, capture: true });
 
@@ -1476,28 +1471,72 @@
             scrollToPage(squareCount - 1, true);
         }
 
-        document.getElementById('image-upload').addEventListener('change', function(e) {
+        document.getElementById('image-upload').addEventListener('change', async function(e) {
             const files = e.target.files;
             if (!files.length) return;
             const baseLeft = currentVisiblePage * SQUARE_SIZE;
-
-            for (let i = 0; i < files.length; i++) {
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    fabric.Image.fromURL(event.target.result, function(img) {
-                        if (img.width > SQUARE_SIZE) img.scaleToWidth(SQUARE_SIZE * 0.8);
-                        img.set({
-                            left: baseLeft + (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
-                            top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2)
-                        });
-                        canvas.add(img);
-                        canvas.setActiveObject(img);
-                    });
-                };
-                reader.readAsDataURL(files[i]);
-            }
+            const fileList = Array.from(files);
             e.target.value = '';
+
+            for (let i = 0; i < fileList.length; i++) {
+                try {
+                    const dataURL = await readAndDownscaleImage(fileList[i], MAX_IMAGE_SHORT_SIDE);
+                    await new Promise((resolve) => {
+                        fabric.Image.fromURL(dataURL, function(img) {
+                            // Adatta in pagina senza superare ~90% del quadrato
+                            const maxDim = Math.max(img.width, img.height);
+                            const fit = (SQUARE_SIZE * 0.9) / maxDim;
+                            if (fit < 1) img.scale(fit);
+
+                            img.set({
+                                left: baseLeft + (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
+                                top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2)
+                            });
+                            canvas.add(img);
+                            canvas.setActiveObject(img);
+                            configureObjectControls(img);
+                            resolve();
+                        }, { crossOrigin: 'anonymous' });
+                    });
+                } catch (err) {
+                    console.warn('Caricamento immagine fallito', err);
+                }
+            }
         });
+
+        /** Legge un file e, se serve, ridimensiona il lato corto a maxShortSide (bitmap reale). */
+        function readAndDownscaleImage(file, maxShortSide) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(reader.error || new Error('read failed'));
+                reader.onload = () => {
+                    const src = reader.result;
+                    const img = new Image();
+                    img.onload = () => {
+                        const shortSide = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+                        if (shortSide <= maxShortSide) {
+                            resolve(src);
+                            return;
+                        }
+                        const scale = maxShortSide / shortSide;
+                        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+                        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+                        const c = document.createElement('canvas');
+                        c.width = w;
+                        c.height = h;
+                        const ctx = c.getContext('2d');
+                        ctx.imageSmoothingEnabled = true;
+                        ctx.imageSmoothingQuality = 'high';
+                        ctx.drawImage(img, 0, 0, w, h);
+                        // JPEG più leggero in memoria / localStorage (foto carousel)
+                        resolve(c.toDataURL('image/jpeg', 0.92));
+                    };
+                    img.onerror = () => reject(new Error('decode failed'));
+                    img.src = src;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
 
         function deleteSelected() {
             if (isCropping || pageDrag.active) return;
@@ -1576,6 +1615,8 @@
                     isHistoryAction = false;
                     initHistory();
                     fitToScreen();
+                    configureAllObjectControls();
+                    updateMobileHint();
                 });
                 return true;
             } catch (err) {
