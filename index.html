@@ -95,16 +95,16 @@
 
                 <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
                     <div id="normal-tools" class="flex gap-1 items-center">
-                        <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg">✂️</button>
+                        <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 md:w-10 md:h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg" aria-label="Ritaglia">✂️</button>
                         <div class="w-px h-6 bg-gray-300 mx-1"></div>
-                        <button onclick="changeLayer('bottom')" data-tooltip="In fondo" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⏬</button>
-                        <button onclick="changeLayer('down')" data-tooltip="Sotto" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⬇️</button>
-                        <button onclick="changeLayer('up')" data-tooltip="Sopra" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⬆️</button>
-                        <button onclick="changeLayer('top')" data-tooltip="In cima" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⏫</button>
+                        <button onclick="changeLayer('bottom')" data-tooltip="In fondo" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta in fondo">⏬</button>
+                        <button onclick="changeLayer('down')" data-tooltip="Sotto" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta sotto">⬇️</button>
+                        <button onclick="changeLayer('up')" data-tooltip="Sopra" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta sopra">⬆️</button>
+                        <button onclick="changeLayer('top')" data-tooltip="In cima" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta in cima">⏫</button>
                     </div>
                     <div id="crop-tools" class="hidden flex gap-2 items-center">
-                        <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm">✓</button>
-                        <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm">✗</button>
+                        <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm" aria-label="Applica ritaglio">✓</button>
+                        <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm" aria-label="Annulla ritaglio">✗</button>
                     </div>
                 </div>
             </div>

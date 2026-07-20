@@ -64,6 +64,34 @@
             z-index: 60;
         }
 
+        /* Touch targets più grandi per crop + reorder layer su mobile */
+        @media (hover: none) and (pointer: coarse), (max-width: 899px) {
+            #floating-toolbar {
+                gap: 0.5rem;
+                padding: 0.55rem 0.7rem;
+            }
+            #floating-toolbar #normal-tools {
+                gap: 0.35rem;
+            }
+            #floating-toolbar .tool-btn {
+                width: 3.25rem;   /* 52px */
+                height: 3.25rem;
+                font-size: 1.35rem;
+                line-height: 1;
+            }
+            #floating-toolbar #normal-tools .w-px {
+                height: 1.75rem;
+                margin-left: 0.35rem;
+                margin-right: 0.35rem;
+            }
+            #floating-toolbar #crop-tools button {
+                min-width: 3.25rem;
+                min-height: 3.25rem;
+                padding: 0.7rem 1.15rem;
+                font-size: 1.15rem;
+            }
+        }
+
         #install-banner { display: none; }
         #install-banner.show { display: flex; }
 
