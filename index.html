@@ -14,7 +14,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="vendor/fabric.min.js"></script>
+    <script src="vendor/fabric.min.js" onerror="this.onerror=null;this.src='https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js'"></script>
     <style>
         :root {
             --brand: #4f46e5;
@@ -1763,6 +1763,10 @@
         document.getElementById('image-upload').addEventListener('change', async function(e) {
             const files = e.target.files;
             if (!files.length) return;
+            if (typeof fabric === 'undefined' || !canvas) {
+                alert('Editor non pronto. Ricarica la pagina.');
+                return;
+            }
             const baseLeft = currentVisiblePage * pageW;
             const fileList = Array.from(files);
             e.target.value = '';
@@ -1770,22 +1774,30 @@
             for (let i = 0; i < fileList.length; i++) {
                 try {
                     const dataURL = await readAndDownscaleImage(fileList[i], MAX_IMAGE_SHORT_SIDE);
-                    await new Promise((resolve) => {
+                    await new Promise((resolve, reject) => {
                         fabric.Image.fromURL(dataURL, function(img) {
-                            // Adatta in pagina senza superare ~90% del quadrato
-                            const maxDim = Math.max(img.width, img.height);
-                            const fit = (Math.min(pageW, pageH) * 0.9) / maxDim;
-                            if (fit < 1) img.scale(fit);
+                            try {
+                                if (!img || typeof img.width !== 'number') {
+                                    reject(new Error('Immagine non decodificata'));
+                                    return;
+                                }
+                                const maxDim = Math.max(img.width, img.height) || 1;
+                                const fit = (Math.min(pageW, pageH) * 0.9) / maxDim;
+                                if (fit < 1) img.scale(fit);
 
-                            img.set({
-                                left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
-                                top: (pageH / 2) - (img.getScaledHeight() / 2)
-                            });
-                            canvas.add(img);
-                            canvas.setActiveObject(img);
-                            configureObjectControls(img);
-                            resolve();
-                        }, { crossOrigin: 'anonymous' });
+                                img.set({
+                                    left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
+                                    top: (pageH / 2) - (img.getScaledHeight() / 2)
+                                });
+                                canvas.add(img);
+                                canvas.setActiveObject(img);
+                                configureObjectControls(img);
+                                canvas.requestRenderAll();
+                                resolve();
+                            } catch (err) {
+                                reject(err);
+                            }
+                        });
                     });
                 } catch (err) {
                     console.warn('Caricamento immagine fallito', err);
@@ -1870,10 +1882,6 @@
         }
 
         // --- PERSISTENZA & PROGETTO ---
-        const PROJECT_TYPE = 'carousel-maker-project';
-        const PROJECT_VERSION = 1;
-        const FABRIC_JSON_PROPS = ['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect'];
-
         function buildProjectPayload() {
             return {
                 type: PROJECT_TYPE,
@@ -1893,39 +1901,60 @@
                     reject(new Error('Progetto non valido'));
                     return;
                 }
-                isHistoryAction = true;
-                if (isCropping) cancelCrop();
-                cancelPageDrag();
-                endPinchGesture(false);
 
-                canvas.loadFromJSON(payload.json, function() {
-                    squareCount = payload.squareCount || 1;
-                    aspectRatio = resolveAspectKey(payload.aspectRatio || '1:1');
-                    pageW = ASPECT_PRESETS[aspectRatio].w;
-                    pageH = ASPECT_PRESETS[aspectRatio].h;
-                    updateAspectToggleUI();
-
-                    if (payload.backgroundColor) {
-                        canvas.backgroundColor = payload.backgroundColor;
-                        document.getElementById('bg-color').value = payload.backgroundColor;
-                        document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
-                    }
-
-                    syncCanvasSize();
-                    guideLines = canvas.getObjects().filter(o => o.isGuideLine);
-                    if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
-                    canvas.discardActiveObject();
-                    canvas.renderAll();
+                let settled = false;
+                const finish = (fn, value) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
                     isHistoryAction = false;
-                    if (resetHistory) initHistory();
-                    else persistProject();
-                    fitToScreen();
-                    applyInteractionMode();
-                    configureAllObjectControls();
-                    updateMobileHint();
-                    updateToolbarPosition();
-                    resolve();
-                });
+                    fn(value);
+                };
+
+                const timeout = setTimeout(() => {
+                    finish(reject, new Error('Timeout ripristino progetto'));
+                }, 20000);
+
+                try {
+                    isHistoryAction = true;
+                    if (isCropping) cancelCrop();
+                    cancelPageDrag();
+                    if (typeof endPinchGesture === 'function') endPinchGesture(false);
+
+                    canvas.loadFromJSON(payload.json, function() {
+                        try {
+                            squareCount = payload.squareCount || 1;
+                            aspectRatio = resolveAspectKey(payload.aspectRatio || '1:1');
+                            pageW = ASPECT_PRESETS[aspectRatio].w;
+                            pageH = ASPECT_PRESETS[aspectRatio].h;
+                            updateAspectToggleUI();
+
+                            if (payload.backgroundColor) {
+                                canvas.backgroundColor = payload.backgroundColor;
+                                document.getElementById('bg-color').value = payload.backgroundColor;
+                                document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
+                            }
+
+                            syncCanvasSize();
+                            guideLines = canvas.getObjects().filter(o => o.isGuideLine);
+                            if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
+                            canvas.discardActiveObject();
+                            canvas.renderAll();
+                            if (resetHistory) initHistory();
+                            else persistProject();
+                            fitToScreen();
+                            applyInteractionMode();
+                            configureAllObjectControls();
+                            updateMobileHint();
+                            updateToolbarPosition();
+                            finish(resolve);
+                        } catch (err) {
+                            finish(reject, err);
+                        }
+                    });
+                } catch (err) {
+                    finish(reject, err);
+                }
             });
         }
 
@@ -1937,16 +1966,18 @@
             }
         }
 
-        function restoreProject() {
+        async function restoreProject() {
             try {
                 const raw = localStorage.getItem(STORAGE_KEY);
                 if (!raw) return false;
                 const payload = JSON.parse(raw);
                 if (!payload || !payload.json) return false;
-                applyProjectPayload(payload, { resetHistory: true });
+                await applyProjectPayload(payload, { resetHistory: true });
                 return true;
             } catch (err) {
-                console.warn('Ripristino fallito', err);
+                console.warn('Ripristino fallito, reset autosave', err);
+                try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+                isHistoryAction = false;
                 return false;
             }
         }
@@ -2040,24 +2071,46 @@
         });
 
         // --- BOOT ---
-        updateMobileHint();
-        applyInteractionMode();
-        updateAspectToggleUI();
-        document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
-            btn.addEventListener('click', () => setAspectRatio(btn.dataset.aspect));
-        });
-        renderPagesUI();
-        if (!restoreProject()) {
-            initHistory();
-            fitToScreen();
-            configureAllObjectControls();
-        }
+        (async function boot() {
+            if (typeof fabric === 'undefined') {
+                console.error('Fabric.js non caricato');
+                alert('Errore di caricamento editor. Controlla la connessione e ricarica.');
+                return;
+            }
 
-        requestAnimationFrame(() => {
-            if (!localStorage.getItem(STORAGE_KEY)) fitToScreen();
+            updateMobileHint();
+            applyInteractionMode();
+            updateAspectToggleUI();
+            document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
+                btn.addEventListener('click', () => setAspectRatio(btn.dataset.aspect));
+            });
+            renderPagesUI();
+
+            let restored = false;
+            try {
+                restored = await restoreProject();
+            } catch (err) {
+                console.warn(err);
+                restored = false;
+            }
+
+            if (!restored) {
+                // Stato pulito se l'autosave era corrotto / incompleto
+                squareCount = 1;
+                aspectRatio = '1:1';
+                pageW = ASPECT_PRESETS['1:1'].w;
+                pageH = ASPECT_PRESETS['1:1'].h;
+                updateAspectToggleUI();
+                syncCanvasSize();
+                initHistory();
+            }
+
+            // Sempre centratura/zoom, anche dopo restore async
+            fitToScreen();
             applyInteractionMode();
             configureAllObjectControls();
-        });
+            renderPagesUI();
+        })();
     </script>
 </body>
 </html>
