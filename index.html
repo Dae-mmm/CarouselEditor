@@ -222,6 +222,47 @@
         body.page-dragging #workspace {
             touch-action: none;
         }
+        body.view-panning {
+            user-select: none;
+            cursor: grabbing;
+        }
+        body.view-panning #workspace {
+            touch-action: none;
+        }
+
+        #rule-grid {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: 0;
+            pointer-events: none;
+            z-index: 15;
+        }
+        #rule-grid.show { display: block; }
+        .rule-grid-page {
+            position: absolute;
+            top: 0;
+        }
+        .rule-grid-page .v,
+        .rule-grid-page .h {
+            position: absolute;
+            background: rgba(128, 128, 128, 0.5);
+        }
+        .rule-grid-page .v {
+            top: 0;
+            bottom: 0;
+            width: 1px;
+        }
+        .rule-grid-page .h {
+            left: 0;
+            right: 0;
+            height: 1px;
+        }
+
+        #btn-grid.is-active {
+            background: #eef2ff;
+            color: #4f46e5;
+        }
 
         #hint-toast {
             pointer-events: none;
@@ -252,15 +293,25 @@
 
     <!-- Indicatori pagine + formato -->
     <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
-        <div id="aspect-toggle" class="inline-flex items-center bg-gray-100 rounded-full p-0.5" role="group" aria-label="Formato pagina">
-            <button type="button" data-aspect="4:5" class="aspect-btn transition" title="Verticale 4:5" aria-label="Verticale 4:5">
-                <span class="aspect-icon aspect-icon--portrait" aria-hidden="true"></span>
-            </button>
-            <button type="button" data-aspect="1:1" class="aspect-btn transition is-active" title="Quadrato 1:1" aria-label="Quadrato 1:1">
-                <span class="aspect-icon aspect-icon--square" aria-hidden="true"></span>
-            </button>
-            <button type="button" data-aspect="1.91:1" class="aspect-btn transition" title="Orizzontale 1.91:1" aria-label="Orizzontale 1.91:1">
-                <span class="aspect-icon aspect-icon--landscape" aria-hidden="true"></span>
+        <div class="flex items-center gap-2">
+            <div id="aspect-toggle" class="inline-flex items-center bg-gray-100 rounded-full p-0.5" role="group" aria-label="Formato pagina">
+                <button type="button" data-aspect="4:5" class="aspect-btn transition" title="Verticale 4:5" aria-label="Verticale 4:5">
+                    <span class="aspect-icon aspect-icon--portrait" aria-hidden="true"></span>
+                </button>
+                <button type="button" data-aspect="1:1" class="aspect-btn transition is-active" title="Quadrato 1:1" aria-label="Quadrato 1:1">
+                    <span class="aspect-icon aspect-icon--square" aria-hidden="true"></span>
+                </button>
+                <button type="button" data-aspect="1.91:1" class="aspect-btn transition" title="Orizzontale 1.91:1" aria-label="Orizzontale 1.91:1">
+                    <span class="aspect-icon aspect-icon--landscape" aria-hidden="true"></span>
+                </button>
+            </div>
+            <button type="button" id="btn-grid" onclick="toggleRuleGrid()" class="aspect-btn transition bg-gray-100" title="Griglia 3×3" aria-label="Griglia 3×3" aria-pressed="false">
+                <span class="aspect-icon" style="width:14px;height:14px;background:
+                    linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 33% 0/1px 100% no-repeat,
+                    linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 66% 0/1px 100% no-repeat,
+                    linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 0 33%/100% 1px no-repeat,
+                    linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 0 66%/100% 1px no-repeat;
+                    border:2px solid currentColor;border-radius:2px;" aria-hidden="true"></span>
             </button>
         </div>
         <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
@@ -275,6 +326,7 @@
         <div id="canvas-stage" class="relative">
             <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
                 <canvas id="canvas"></canvas>
+                <div id="rule-grid"></div>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
 
@@ -349,7 +401,9 @@
         const MAX_IMAGE_SHORT_SIDE = 1350;
         const STORAGE_KEY = 'carousel-maker-project-v4';
         const LONG_PRESS_MS = 1000;
-        const LONG_PRESS_MOVE_TOL = 14;
+        const LONG_PRESS_MOVE_TOL = 12;
+        const LONG_PRESS_RING_DELAY = 380;
+        const FIT_SCALE = 0.86; // pagine un filo più piccole del fit pieno
 
         let aspectRatio = '1:1';
         let pageW = ASPECT_PRESETS['1:1'].w;
@@ -381,14 +435,27 @@
         // --- Long-press page drag state ---
         const pageDrag = {
             timer: null,
+            ringTimer: null,
             armed: false,      // timer running
             active: false,     // dragging page
             fromIndex: null,
-            insertAt: null,    // insertion index 0..squareCount (slot before page i, or end)
+            insertAt: null,
             startClientX: 0,
             startClientY: 0,
             ghostSize: 160
         };
+
+        // Drag veloce sullo sfondo → pan della visuale
+        const viewPan = {
+            pending: false,
+            active: false,
+            startClientX: 0,
+            startClientY: 0,
+            startScrollLeft: 0,
+            startScrollTop: 0
+        };
+
+        let showRuleGrid = false;
 
         // Pinch + rotate multitouch (mobile)
         const pinchGesture = {
@@ -412,9 +479,9 @@
             const hint = document.getElementById('hint-toast');
             if (!hint) return;
             if (isMobileUI()) {
-                hint.innerHTML = 'Tieni premuto 1s sullo <strong>sfondo</strong> per spostare una pagina · Pinch/ruota sull’immagine selezionata';
+                hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per spostare la vista · Tieni 1s per riordinare · Pinch sull’immagine';
             } else {
-                hint.innerHTML = 'Tieni premuto 1s sullo <strong>sfondo</strong> di una pagina per trascinarla';
+                hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per muovere la vista · Tieni premuto 1s per spostare una pagina';
             }
         }
 
@@ -801,7 +868,7 @@
             const workspace = document.getElementById('workspace');
             const availW = Math.max(120, workspace.clientWidth - 32);
             const availH = Math.max(120, workspace.clientHeight - 32);
-            currentZoom = Math.min(availW / pageW, availH / pageH, 1);
+            currentZoom = Math.min(availW / pageW, availH / pageH, 1) * FIT_SCALE;
             currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom));
             applyZoom();
             scrollToPage(currentVisiblePage, false);
@@ -1004,12 +1071,48 @@
             rebuildGuideLines();
             applyZoom();
             renderPagesUI();
+            renderRuleGrid();
         }
 
         function updateAspectToggleUI() {
             document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.aspect === aspectRatio);
             });
+        }
+
+        function toggleRuleGrid() {
+            showRuleGrid = !showRuleGrid;
+            const btn = document.getElementById('btn-grid');
+            btn.classList.toggle('is-active', showRuleGrid);
+            btn.setAttribute('aria-pressed', showRuleGrid ? 'true' : 'false');
+            renderRuleGrid();
+        }
+
+        function renderRuleGrid() {
+            const el = document.getElementById('rule-grid');
+            if (!el) return;
+            el.innerHTML = '';
+            if (!showRuleGrid) {
+                el.classList.remove('show');
+                return;
+            }
+            el.classList.add('show');
+            el.style.width = (pageW * squareCount) + 'px';
+            el.style.height = pageH + 'px';
+            for (let i = 0; i < squareCount; i++) {
+                const page = document.createElement('div');
+                page.className = 'rule-grid-page';
+                page.style.left = (i * pageW) + 'px';
+                page.style.width = pageW + 'px';
+                page.style.height = pageH + 'px';
+                page.innerHTML = `
+                    <div class="v" style="left:33.333%"></div>
+                    <div class="v" style="left:66.666%"></div>
+                    <div class="h" style="top:33.333%"></div>
+                    <div class="h" style="top:66.666%"></div>
+                `;
+                el.appendChild(page);
+            }
         }
 
         /**
@@ -1190,6 +1293,10 @@
                 clearTimeout(pageDrag.timer);
                 pageDrag.timer = null;
             }
+            if (pageDrag.ringTimer) {
+                clearTimeout(pageDrag.ringTimer);
+                pageDrag.ringTimer = null;
+            }
             pageDrag.armed = false;
             document.getElementById('longpress-ring').classList.remove('show');
         }
@@ -1199,6 +1306,30 @@
             ring.style.left = x + 'px';
             ring.style.top = y + 'px';
             ring.classList.add('show');
+        }
+
+        function beginViewPan() {
+            viewPan.pending = false;
+            viewPan.active = true;
+            document.body.classList.add('view-panning');
+            if (canvas._currentTransform) canvas._currentTransform = null;
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+            updateToolbarPosition();
+        }
+
+        function updateViewPan(pt) {
+            if (!viewPan.active) return;
+            const workspace = document.getElementById('workspace');
+            workspace.scrollLeft = viewPan.startScrollLeft - (pt.x - viewPan.startClientX);
+            workspace.scrollTop = viewPan.startScrollTop - (pt.y - viewPan.startClientY);
+        }
+
+        function endViewPan() {
+            viewPan.pending = false;
+            if (!viewPan.active) return;
+            viewPan.active = false;
+            document.body.classList.remove('view-panning');
         }
 
         /**
@@ -1358,6 +1489,7 @@
 
         function cancelPageDrag() {
             cancelLongPressArm();
+            endViewPan();
             if (pageDrag.active) {
                 endPageDragUI();
                 canvas.renderAll();
@@ -1365,35 +1497,58 @@
         }
 
         canvas.on('mouse:down', function(opt) {
-            if (isCropping || pageDrag.active || pinchGesture.active) return;
+            if (isCropping || pageDrag.active || pinchGesture.active || viewPan.active) return;
             if (!isBackgroundTarget(opt.target)) return;
-            if (squareCount < 2) return;
 
             const pt = clientPoint(opt.e);
+            const workspace = document.getElementById('workspace');
             const pointer = canvas.getPointer(opt.e);
             const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / pageW)));
 
-            pageDrag.armed = true;
+            // Prepara pan (drag veloce) e, se ci sono più pagine, long-press per riordinare
+            viewPan.pending = true;
+            viewPan.startClientX = pt.x;
+            viewPan.startClientY = pt.y;
+            viewPan.startScrollLeft = workspace.scrollLeft;
+            viewPan.startScrollTop = workspace.scrollTop;
+
             pageDrag.startClientX = pt.x;
             pageDrag.startClientY = pt.y;
             pageDrag.fromIndex = pageIndex;
-            showLongPressRing(pt.x, pt.y);
 
-            pageDrag.timer = setTimeout(() => {
-                startPageDrag(pageIndex, pt.x, pt.y);
-            }, LONG_PRESS_MS);
+            if (squareCount >= 2) {
+                pageDrag.armed = true;
+                pageDrag.ringTimer = setTimeout(() => {
+                    if (pageDrag.armed && !viewPan.active) {
+                        showLongPressRing(pageDrag.startClientX, pageDrag.startClientY);
+                    }
+                }, LONG_PRESS_RING_DELAY);
+                pageDrag.timer = setTimeout(() => {
+                    if (viewPan.active) return;
+                    startPageDrag(pageIndex, pt.x, pt.y);
+                }, LONG_PRESS_MS);
+            }
         });
 
         canvas.on('mouse:move', function(opt) {
             const pt = clientPoint(opt.e);
 
-            if (pageDrag.armed && !pageDrag.active) {
-                const dx = pt.x - pageDrag.startClientX;
-                const dy = pt.y - pageDrag.startClientY;
+            if (viewPan.active) {
+                updateViewPan(pt);
+                return;
+            }
+
+            if ((pageDrag.armed || viewPan.pending) && !pageDrag.active) {
+                const dx = pt.x - (pageDrag.armed ? pageDrag.startClientX : viewPan.startClientX);
+                const dy = pt.y - (pageDrag.armed ? pageDrag.startClientY : viewPan.startClientY);
                 if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOL) {
                     cancelLongPressArm();
-                } else {
-                    showLongPressRing(pageDrag.startClientX, pageDrag.startClientY);
+                    beginViewPan({
+                        x: pageDrag.armed ? pageDrag.startClientX : viewPan.startClientX,
+                        y: pageDrag.armed ? pageDrag.startClientY : viewPan.startClientY
+                    });
+                    // riallinea allo scroll iniziale e applica delta corrente
+                    updateViewPan(pt);
                 }
                 return;
             }
@@ -1404,7 +1559,6 @@
                 ghost.style.top = pt.y + 'px';
                 updatePageDragVisuals(pt.x);
 
-                // Auto-scroll workspace mentre si trascina ai bordi
                 const workspace = document.getElementById('workspace');
                 const edge = 48;
                 if (pt.x < edge) workspace.scrollLeft -= 18;
@@ -1413,6 +1567,9 @@
         });
 
         function onPointerUp() {
+            if (viewPan.active || viewPan.pending) {
+                endViewPan();
+            }
             if (pageDrag.armed && !pageDrag.active) {
                 cancelLongPressArm();
                 return;
@@ -1422,13 +1579,12 @@
 
         canvas.on('mouse:up', onPointerUp);
         canvas.on('mouse:out', function() {
-            // non cancellare se stiamo trascinando fuori
-            if (pageDrag.armed && !pageDrag.active) cancelLongPressArm();
+            if (pageDrag.armed && !pageDrag.active && !viewPan.active) cancelLongPressArm();
         });
 
-        // Evita menu contestuale durante long-press
+        // Evita menu contestuale durante long-press / pan
         document.getElementById('canvas-wrapper').addEventListener('contextmenu', (e) => {
-            if (pageDrag.armed || pageDrag.active || pinchGesture.active) e.preventDefault();
+            if (pageDrag.armed || pageDrag.active || pinchGesture.active || viewPan.active) e.preventDefault();
         });
 
         // --- MULTITOUCH: pinch (scale) + rotate su oggetto selezionato (mobile) ---
@@ -1547,7 +1703,7 @@
                 updatePinchGesture(e.touches[0], e.touches[1]);
                 return;
             }
-            if (pageDrag.armed || pageDrag.active) {
+            if (pageDrag.armed || pageDrag.active || viewPan.active || viewPan.pending) {
                 e.preventDefault();
             }
         }, { passive: false, capture: true });
