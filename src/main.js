@@ -307,6 +307,7 @@ let currentSnapLines = [];
 let pendingSnapMove = null;
 let pendingSnapScale = null;
 const SNAP_DISTANCE = 10;
+let snapEnabled = true;
 
 function clearGuidelines() {
     if (currentSnapLines.length > 0 || pendingSnapMove || pendingSnapScale) {
@@ -317,11 +318,46 @@ function clearGuidelines() {
     }
 }
 
+function toggleSnap() {
+    snapEnabled = !snapEnabled;
+    const btn = document.getElementById('btn-snap');
+    if (btn) {
+        btn.classList.toggle('is-active', snapEnabled);
+        btn.setAttribute('aria-pressed', snapEnabled ? 'true' : 'false');
+        btn.title = snapEnabled ? 'Snap magnetico attivo' : 'Snap magnetico disattivo';
+    }
+    if (!snapEnabled) clearGuidelines();
+}
+
+/** Linee di snap: bordi/centri oggetti + (se griglia accesa) terzi della regola 3×3 */
+function collectSnapAxes(excludeObj) {
+    const xLines = [];
+    const yLines = [];
+
+    canvas.getObjects().forEach(t => {
+        if (t === excludeObj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
+        const bounds = t.getBoundingRect();
+        const center = t.getCenterPoint();
+        xLines.push(bounds.left, center.x, bounds.left + bounds.width);
+        yLines.push(bounds.top, center.y, bounds.top + bounds.height);
+    });
+
+    if (showRuleGrid) {
+        for (let i = 0; i < squareCount; i++) {
+            const ox = i * pageW;
+            xLines.push(ox + pageW / 3, ox + (2 * pageW) / 3);
+        }
+        yLines.push(pageH / 3, (2 * pageH) / 3);
+    }
+
+    return { xLines, yLines };
+}
+
 function handleSnapping(e) {
     if (pageDrag.active || pageDrag.armed || viewPan.active) return;
     const obj = e.target;
     if (!obj || obj.isCropping) return;
-    if (e.e && e.e.altKey) { clearGuidelines(); return; }
+    if (!snapEnabled || (e.e && e.e.altKey)) { clearGuidelines(); return; }
 
     const action = e.transform ? e.transform.action : '';
     const isMoving = action === 'drag';
@@ -330,17 +366,8 @@ function handleSnapping(e) {
 
     const objBounds = obj.getBoundingRect();
     const objCenter = obj.getCenterPoint();
-    const targets = [];
-    canvas.getObjects().forEach(t => {
-        if (t === obj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
-        const bounds = t.getBoundingRect();
-        const center = t.getCenterPoint();
-        targets.push({
-            left: bounds.left, centerX: center.x, right: bounds.left + bounds.width,
-            top: bounds.top, centerY: center.y, bottom: bounds.top + bounds.height
-        });
-    });
-    if (!targets.length) return;
+    const { xLines, yLines } = collectSnapAxes(obj);
+    if (!xLines.length && !yLines.length) { clearGuidelines(); return; }
 
     let linesToDraw = [];
 
@@ -349,38 +376,39 @@ function handleSnapping(e) {
         let diffX = SNAP_DISTANCE + 1, diffY = SNAP_DISTANCE + 1;
         let finalLeft = obj.left, finalTop = obj.top;
 
-        targets.forEach(t => {
-            const objXs = [
-                { val: objBounds.left, type: 'left' },
-                { val: objCenter.x, type: 'center' },
-                { val: objBounds.left + objBounds.width, type: 'right' }
-            ];
-            [t.left, t.centerX, t.right].forEach(tx => {
-                objXs.forEach(ox => {
-                    if (Math.abs(ox.val - tx) < diffX) {
-                        diffX = Math.abs(ox.val - tx);
-                        snapX = tx;
-                        if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
-                        if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
-                        if (ox.type === 'right') finalLeft = obj.left + (tx - (objBounds.left + objBounds.width));
-                    }
-                });
+        const objXs = [
+            { val: objBounds.left, type: 'left' },
+            { val: objCenter.x, type: 'center' },
+            { val: objBounds.left + objBounds.width, type: 'right' }
+        ];
+        xLines.forEach(tx => {
+            objXs.forEach(ox => {
+                const d = Math.abs(ox.val - tx);
+                if (d < diffX) {
+                    diffX = d;
+                    snapX = tx;
+                    if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
+                    if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
+                    if (ox.type === 'right') finalLeft = obj.left + (tx - (objBounds.left + objBounds.width));
+                }
             });
-            const objYs = [
-                { val: objBounds.top, type: 'top' },
-                { val: objCenter.y, type: 'center' },
-                { val: objBounds.top + objBounds.height, type: 'bottom' }
-            ];
-            [t.top, t.centerY, t.bottom].forEach(ty => {
-                objYs.forEach(oy => {
-                    if (Math.abs(oy.val - ty) < diffY) {
-                        diffY = Math.abs(oy.val - ty);
-                        snapY = ty;
-                        if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
-                        if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
-                        if (oy.type === 'bottom') finalTop = obj.top + (ty - (objBounds.top + objBounds.height));
-                    }
-                });
+        });
+
+        const objYs = [
+            { val: objBounds.top, type: 'top' },
+            { val: objCenter.y, type: 'center' },
+            { val: objBounds.top + objBounds.height, type: 'bottom' }
+        ];
+        yLines.forEach(ty => {
+            objYs.forEach(oy => {
+                const d = Math.abs(oy.val - ty);
+                if (d < diffY) {
+                    diffY = d;
+                    snapY = ty;
+                    if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
+                    if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
+                    if (oy.type === 'bottom') finalTop = obj.top + (ty - (objBounds.top + objBounds.height));
+                }
             });
         });
 
@@ -394,14 +422,10 @@ function handleSnapping(e) {
         let scaleSnapX = null, scaleSnapY = null;
         let sDiffX = SNAP_DISTANCE + 1, sDiffY = SNAP_DISTANCE + 1;
 
-        targets.forEach(t => {
-            const targetXs = [t.left, t.centerX, t.right];
-            const targetYs = [t.top, t.centerY, t.bottom];
-            if (activeCorner.includes('l')) targetXs.forEach(tx => { if (Math.abs(objBounds.left - tx) < sDiffX) { sDiffX = Math.abs(objBounds.left - tx); scaleSnapX = tx; } });
-            else if (activeCorner.includes('r')) targetXs.forEach(tx => { if (Math.abs((objBounds.left + objBounds.width) - tx) < sDiffX) { sDiffX = Math.abs((objBounds.left + objBounds.width) - tx); scaleSnapX = tx; } });
-            if (activeCorner.includes('t')) targetYs.forEach(ty => { if (Math.abs(objBounds.top - ty) < sDiffY) { sDiffY = Math.abs(objBounds.top - ty); scaleSnapY = ty; } });
-            else if (activeCorner.includes('b')) targetYs.forEach(ty => { if (Math.abs((objBounds.top + objBounds.height) - ty) < sDiffY) { sDiffY = Math.abs((objBounds.top + objBounds.height) - ty); scaleSnapY = ty; } });
-        });
+        if (activeCorner.includes('l')) xLines.forEach(tx => { const d = Math.abs(objBounds.left - tx); if (d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+        else if (activeCorner.includes('r')) xLines.forEach(tx => { const d = Math.abs((objBounds.left + objBounds.width) - tx); if (d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+        if (activeCorner.includes('t')) yLines.forEach(ty => { const d = Math.abs(objBounds.top - ty); if (d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
+        else if (activeCorner.includes('b')) yLines.forEach(ty => { const d = Math.abs((objBounds.top + objBounds.height) - ty); if (d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
 
         if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, -10000, scaleSnapX, 10000]);
         if (scaleSnapY !== null) linesToDraw.push([-10000, scaleSnapY, 10000, scaleSnapY]);
@@ -2126,6 +2150,7 @@ Object.assign(window, {
   cancelCrop,
   changeLayer,
   toggleRuleGrid,
+  toggleSnap,
   openAuthModal,
   closeAuthModal,
   switchAuthTab,

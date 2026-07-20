@@ -71,6 +71,9 @@
                     linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 0 66%/100% 1px no-repeat;
                     border:2px solid currentColor;border-radius:2px;" aria-hidden="true"></span>
             </button>
+            <button type="button" id="btn-snap" onclick="toggleSnap()" class="aspect-btn transition bg-gray-100 is-active" title="Snap magnetico" aria-label="Attiva o disattiva snap" aria-pressed="true">
+                <span class="snap-icon" aria-hidden="true">🧲</span>
+            </button>
         </div>
         <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
         <div class="flex items-center gap-3 text-xs text-gray-500">
@@ -95,7 +98,7 @@
 
                 <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
                     <div id="normal-tools" class="flex gap-1 items-center">
-                        <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 md:w-10 md:h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg" aria-label="Ritaglia">✂️</button>
+                        <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg" aria-label="Ritaglia">✂️</button>
                         <div class="w-px h-6 bg-gray-300 mx-1"></div>
                         <button onclick="changeLayer('bottom')" data-tooltip="In fondo" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta in fondo">⏬</button>
                         <button onclick="changeLayer('down')" data-tooltip="Sotto" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base" aria-label="Sposta sotto">⬇️</button>
