@@ -152,7 +152,15 @@
             position: absolute;
             top: 0;
             height: 100%;
-            background: rgba(15, 23, 42, 0.28);
+            background: repeating-linear-gradient(
+                -45deg,
+                rgba(79, 70, 229, 0.08),
+                rgba(79, 70, 229, 0.08) 8px,
+                rgba(79, 70, 229, 0.16) 8px,
+                rgba(79, 70, 229, 0.16) 16px
+            );
+            outline: 2px dashed rgba(79, 70, 229, 0.55);
+            outline-offset: -2px;
             z-index: 20;
             pointer-events: none;
             border-radius: 0;
@@ -996,6 +1004,54 @@
             ring.classList.add('show');
         }
 
+        /**
+         * Anteprima drag: solo oggetti che appartengono alla pagina
+         * (angolo in alto a sinistra), non lo screenshot dell'area.
+         * Così le immagini "a metà" della pagina vicina non compaiono.
+         */
+        function capturePageOwnedPreview(pageIndex) {
+            const states = canvas.getObjects().map(o => ({
+                obj: o,
+                visible: o.visible !== false,
+                opacity: o.opacity
+            }));
+
+            canvas.getObjects().forEach(o => {
+                if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) {
+                    o.visible = false;
+                    return;
+                }
+                o.visible = getObjectPageIndex(o) === pageIndex;
+            });
+            canvas.renderAll();
+
+            const dataURL = canvas.toDataURL({
+                format: 'png',
+                left: pageIndex * SQUARE_SIZE,
+                top: 0,
+                width: SQUARE_SIZE,
+                height: SQUARE_SIZE,
+                enableRetinaScaling: false
+            });
+
+            states.forEach(({ obj, visible, opacity }) => {
+                obj.visible = visible;
+                obj.opacity = opacity;
+            });
+            canvas.renderAll();
+            return dataURL;
+        }
+
+        function setOwnedObjectsLifted(pageIndex, lifted) {
+            canvas.getObjects().forEach(o => {
+                if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) return;
+                if (getObjectPageIndex(o) === pageIndex) {
+                    o.visible = !lifted;
+                }
+            });
+            canvas.renderAll();
+        }
+
         function startPageDrag(fromIndex, clientX, clientY) {
             if (squareCount < 2 || isCropping) {
                 cancelLongPressArm();
@@ -1017,22 +1073,12 @@
                     o.evented = false;
                 }
             });
-            canvas.renderAll();
             updateToolbarPosition();
 
-            // Snapshot pagina come ghost
-            guideLines.forEach(l => l.set('opacity', 0));
-            canvas.renderAll();
-            const dataURL = canvas.toDataURL({
-                format: 'jpeg',
-                quality: 0.7,
-                left: fromIndex * SQUARE_SIZE,
-                top: 0,
-                width: SQUARE_SIZE,
-                height: SQUARE_SIZE
-            });
-            guideLines.forEach(l => l.set('opacity', 1));
-            canvas.renderAll();
+            const dataURL = capturePageOwnedPreview(fromIndex);
+
+            // Solleva gli elementi della pagina (restano visibili quelli della pagina vicina)
+            setOwnedObjectsLifted(fromIndex, true);
 
             const ghost = document.getElementById('page-ghost');
             const size = Math.min(200, Math.max(120, SQUARE_SIZE * currentZoom * 0.45));
@@ -1044,7 +1090,7 @@
             ghost.style.left = clientX + 'px';
             ghost.style.top = clientY + 'px';
 
-            // Dim della pagina sorgente
+            // Evidenzia lo slot vuoto della pagina (senza coprire elementi vicini)
             const dim = document.getElementById('page-drag-dim');
             dim.style.left = (fromIndex * SQUARE_SIZE) + 'px';
             dim.style.width = SQUARE_SIZE + 'px';
@@ -1103,13 +1149,15 @@
             document.getElementById('page-drag-dim').classList.remove('show');
             document.getElementById('longpress-ring').classList.remove('show');
 
-            canvas.forEachObject(o => {
-                if (!o.isGuideLine && !o.isCropRect) {
-                    o.selectable = true;
-                    o.evented = true;
-                }
+            // Ripristina visibilità di eventuali oggetti "sollevati"
+            canvas.getObjects().forEach(o => {
+                if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) return;
+                o.visible = true;
+                o.selectable = true;
+                o.evented = true;
             });
             canvas.selection = true;
+            canvas.renderAll();
         }
 
         function cancelPageDrag() {

@@ -1,5 +1,5 @@
 /* Carousel Maker — Service Worker */
-const CACHE_VERSION = 'carousel-maker-v2';
+const CACHE_VERSION = 'carousel-maker-v3';
 const CORE_ASSETS = [
   './',
   './index.html',
