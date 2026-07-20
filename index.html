@@ -374,9 +374,13 @@
 
             <button onclick="deleteSelected()" class="dock-btn text-red-500" title="Elimina selezione"><span class="ico">🗑️</span>Elimina</button>
 
-            <button onclick="exportCarousel()" class="dock-btn text-indigo-700" title="Esporta"><span class="ico">📤</span>Esporta</button>
+            <button onclick="exportCarousel()" class="dock-btn text-indigo-700" title="Esporta JPEG"><span class="ico">📤</span>Esporta</button>
         </div>
-        <div class="max-w-lg mx-auto flex items-center justify-center gap-3 mt-1 pb-0.5">
+        <div class="max-w-lg mx-auto flex items-center justify-center gap-2 mt-1 pb-0.5 flex-wrap">
+            <button onclick="saveProjectFile()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Scarica il progetto (.json con immagini)">Salva</button>
+            <button onclick="document.getElementById('project-open').click()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Apri un progetto salvato">Apri</button>
+            <input type="file" id="project-open" accept=".json,application/json" class="hidden">
+            <span class="w-px h-4 bg-gray-200 mx-1"></span>
             <button onclick="zoomOut()" class="w-8 h-8 rounded-full bg-gray-100 font-bold text-gray-600">−</button>
             <span id="zoom-level" class="text-xs font-bold w-12 text-center text-gray-600">100%</span>
             <button onclick="zoomIn()" class="w-8 h-8 rounded-full bg-gray-100 font-bold text-gray-600">+</button>
@@ -400,6 +404,9 @@
         };
         const MAX_IMAGE_SHORT_SIDE = 1350;
         const STORAGE_KEY = 'carousel-maker-project-v4';
+        const PROJECT_TYPE = 'carousel-maker-project';
+        const PROJECT_VERSION = 1;
+        const FABRIC_JSON_PROPS = ['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect'];
         const LONG_PRESS_MS = 1000;
         const LONG_PRESS_MOVE_TOL = 12;
         const LONG_PRESS_RING_DELAY = 380;
@@ -592,7 +599,7 @@
         function saveState() {
             if (isHistoryAction || isCropping || pageDrag.active) return;
             historyStack = historyStack.slice(0, historyIndex + 1);
-            const json = canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']);
+            const json = canvas.toJSON(FABRIC_JSON_PROPS);
             historyStack.push({ json, squareCount, aspectRatio });
             historyIndex++;
             updateUndoRedoUI();
@@ -1862,18 +1869,71 @@
             canvas.renderAll();
         }
 
-        // --- PERSISTENZA ---
+        // --- PERSISTENZA & PROGETTO ---
+        const PROJECT_TYPE = 'carousel-maker-project';
+        const PROJECT_VERSION = 1;
+        const FABRIC_JSON_PROPS = ['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect'];
+
+        function buildProjectPayload() {
+            return {
+                type: PROJECT_TYPE,
+                version: PROJECT_VERSION,
+                squareCount,
+                aspectRatio,
+                backgroundColor: canvas.backgroundColor,
+                // Fabric serializza le immagini come data URL (base64): un solo file portatile
+                json: canvas.toJSON(FABRIC_JSON_PROPS),
+                savedAt: Date.now()
+            };
+        }
+
+        function applyProjectPayload(payload, { resetHistory = true } = {}) {
+            return new Promise((resolve, reject) => {
+                if (!payload || !payload.json) {
+                    reject(new Error('Progetto non valido'));
+                    return;
+                }
+                isHistoryAction = true;
+                if (isCropping) cancelCrop();
+                cancelPageDrag();
+                endPinchGesture(false);
+
+                canvas.loadFromJSON(payload.json, function() {
+                    squareCount = payload.squareCount || 1;
+                    aspectRatio = resolveAspectKey(payload.aspectRatio || '1:1');
+                    pageW = ASPECT_PRESETS[aspectRatio].w;
+                    pageH = ASPECT_PRESETS[aspectRatio].h;
+                    updateAspectToggleUI();
+
+                    if (payload.backgroundColor) {
+                        canvas.backgroundColor = payload.backgroundColor;
+                        document.getElementById('bg-color').value = payload.backgroundColor;
+                        document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
+                    }
+
+                    syncCanvasSize();
+                    guideLines = canvas.getObjects().filter(o => o.isGuideLine);
+                    if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
+                    canvas.discardActiveObject();
+                    canvas.renderAll();
+                    isHistoryAction = false;
+                    if (resetHistory) initHistory();
+                    else persistProject();
+                    fitToScreen();
+                    applyInteractionMode();
+                    configureAllObjectControls();
+                    updateMobileHint();
+                    updateToolbarPosition();
+                    resolve();
+                });
+            });
+        }
+
         function persistProject() {
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                    squareCount,
-                    aspectRatio,
-                    backgroundColor: canvas.backgroundColor,
-                    json: canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']),
-                    savedAt: Date.now()
-                }));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(buildProjectPayload()));
             } catch (err) {
-                console.warn('Persistenza non disponibile', err);
+                console.warn('Autosave non disponibile (quota o private mode)', err);
             }
         }
 
@@ -1883,36 +1943,59 @@
                 if (!raw) return false;
                 const payload = JSON.parse(raw);
                 if (!payload || !payload.json) return false;
-                isHistoryAction = true;
-                canvas.loadFromJSON(payload.json, function() {
-                    squareCount = payload.squareCount || 1;
-                    if (payload.aspectRatio) {
-                        aspectRatio = resolveAspectKey(payload.aspectRatio);
-                        pageW = ASPECT_PRESETS[aspectRatio].w;
-                        pageH = ASPECT_PRESETS[aspectRatio].h;
-                        updateAspectToggleUI();
-                    }
-                    if (payload.backgroundColor) {
-                        canvas.backgroundColor = payload.backgroundColor;
-                        document.getElementById('bg-color').value = payload.backgroundColor;
-                        document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
-                    }
-                    syncCanvasSize();
-                    guideLines = canvas.getObjects().filter(o => o.isGuideLine);
-                    if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
-                    canvas.renderAll();
-                    isHistoryAction = false;
-                    initHistory();
-                    fitToScreen();
-                    configureAllObjectControls();
-                    updateMobileHint();
-                });
+                applyProjectPayload(payload, { resetHistory: true });
                 return true;
             } catch (err) {
                 console.warn('Ripristino fallito', err);
                 return false;
             }
         }
+
+        function saveProjectFile() {
+            if (isCropping || pageDrag.active) return;
+            try {
+                const payload = buildProjectPayload();
+                const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+                const link = document.createElement('a');
+                link.download = `carousel-progetto-${stamp}.json`;
+                link.href = url;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } catch (err) {
+                console.warn('Salvataggio progetto fallito', err);
+                alert('Non riesco a salvare il progetto.');
+            }
+        }
+
+        function openProjectFile(file) {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async () => {
+                try {
+                    const payload = JSON.parse(reader.result);
+                    if (payload.type && payload.type !== PROJECT_TYPE) {
+                        throw new Error('File non riconosciuto come progetto Carousel Maker');
+                    }
+                    if (!payload.json) throw new Error('Canvas mancante nel file');
+                    await applyProjectPayload(payload, { resetHistory: true });
+                } catch (err) {
+                    console.warn('Apertura progetto fallita', err);
+                    alert('File progetto non valido.');
+                }
+            };
+            reader.onerror = () => alert('Lettura file fallita.');
+            reader.readAsText(file);
+        }
+
+        document.getElementById('project-open').addEventListener('change', function(e) {
+            const file = e.target.files && e.target.files[0];
+            e.target.value = '';
+            if (file) openProjectFile(file);
+        });
 
         // --- PWA ---
         function updateOnlineStatus() {
