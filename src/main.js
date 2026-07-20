@@ -1652,16 +1652,18 @@ function saveProjectFile() {
     if (isCropping || pageDrag.active) return;
     try {
         const payload = buildProjectPayload();
+        // .CMF = Carousel Maker File (JSON sotto il cofano; estensione solo estetica)
         const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const link = document.createElement('a');
-        link.download = `carousel-progetto-${stamp}.json`;
+        link.download = `carousel-progetto-${stamp}.cmf`;
         link.href = url;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast('Progetto scaricato (.CMF)');
     } catch (err) {
         console.warn('Salvataggio progetto fallito', err);
         alert('Non riesco a salvare il progetto.');
@@ -1679,9 +1681,10 @@ function openProjectFile(file) {
             }
             if (!payload.json) throw new Error('Canvas mancante nel file');
             await applyProjectPayload(payload, { resetHistory: true });
+            showToast('Progetto aperto');
         } catch (err) {
             console.warn('Apertura progetto fallita', err);
-            alert('File progetto non valido.');
+            alert('File progetto non valido. Usa un file .CMF (o .json) di Carousel Maker.');
         }
     };
     reader.onerror = () => alert('Lettura file fallita.');
@@ -1867,6 +1870,8 @@ async function logout() {
 
 
 
+const CLOUD_PROJECT_LIMIT = 3;
+
 function projectRowFromLocal(name) {
     const payload = buildProjectPayload();
     return {
@@ -1890,6 +1895,31 @@ function localPayloadFromRow(row) {
     };
 }
 
+async function countCloudProjects() {
+    const { count, error } = await requireSupabase()
+        .from('projects')
+        .select('id', { count: 'exact', head: true });
+    if (error) throw error;
+    return count || 0;
+}
+
+function updateCloudSlotsUI(count) {
+    const label = document.getElementById('cloud-slots-label');
+    const hint = document.getElementById('cloud-limit-hint');
+    const saveBtn = document.getElementById('btn-save-new-cloud');
+    const nameInput = document.getElementById('new-project-name');
+    const atLimit = count >= CLOUD_PROJECT_LIMIT;
+
+    if (label) {
+        label.textContent = `${count} / ${CLOUD_PROJECT_LIMIT}`;
+        label.classList.toggle('text-amber-700', atLimit);
+        label.classList.toggle('text-gray-500', !atLimit);
+    }
+    if (hint) hint.classList.toggle('hidden', !atLimit);
+    if (saveBtn) saveBtn.disabled = atLimit;
+    if (nameInput) nameInput.disabled = atLimit;
+}
+
 async function saveCurrentProject() {
     if (!supabaseClient) {
         showToast('Supabase non configurato. Imposta le env vars su Vercel.', true);
@@ -1901,6 +1931,14 @@ async function saveCurrentProject() {
         return;
     }
     if (!currentProjectId) {
+        try {
+            const count = await countCloudProjects();
+            if (count >= CLOUD_PROJECT_LIMIT) {
+                showToast(`Limite ${CLOUD_PROJECT_LIMIT} progetti cloud. Salva in locale (.CMF).`, true);
+                openProjectsModal();
+                return;
+            }
+        } catch (_) { /* open modal anyway */ }
         openProjectsModal();
         document.getElementById('new-project-name')?.focus();
         showToast('Scegli un nome e salva come nuovo progetto');
@@ -1945,6 +1983,16 @@ async function saveAsNewProject() {
     }
 
     try {
+        const count = await countCloudProjects();
+        if (count >= CLOUD_PROJECT_LIMIT) {
+            updateCloudSlotsUI(count);
+            feedback.textContent = `Limite di ${CLOUD_PROJECT_LIMIT} progetti cloud raggiunto. Eliminane uno oppure salva in locale (.CMF).`;
+            feedback.className = 'mt-2 text-sm rounded-xl px-3 py-2 text-amber-800 bg-amber-50';
+            feedback.classList.remove('hidden');
+            showToast('Usa Salva file .CMF per altri progetti', true);
+            return;
+        }
+
         const row = {
             user_id: currentUser.id,
             ...projectRowFromLocal(name),
@@ -2017,8 +2065,11 @@ async function refreshProjectsList() {
             .order('updated_at', { ascending: false });
         if (error) throw error;
 
+        const count = data ? data.length : 0;
+        updateCloudSlotsUI(count);
+
         if (!data || data.length === 0) {
-            list.innerHTML = '<p class="text-sm text-gray-400 text-center py-8">Nessun progetto salvato ancora.</p>';
+            list.innerHTML = '<p class="text-sm text-gray-400 text-center py-8">Nessun progetto cloud. Puoi salvarne fino a 3, oppure usa file .CMF in locale.</p>';
             return;
         }
 

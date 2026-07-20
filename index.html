@@ -138,11 +138,11 @@
             <button onclick="exportCarousel()" class="dock-btn text-indigo-700" title="Esporta JPEG"><span class="ico">📤</span>Esporta</button>
         </div>
         <div class="max-w-lg mx-auto flex items-center justify-center gap-2 mt-1 pb-0.5 flex-wrap">
-            <button onclick="saveProjectFile()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Scarica il progetto (.json con immagini)">Salva file</button>
-            <button onclick="document.getElementById('project-open').click()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Apri un progetto salvato">Apri file</button>
+            <button onclick="saveProjectFile()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Scarica il progetto (.CMF — Carousel Maker File)">Salva file</button>
+            <button onclick="document.getElementById('project-open').click()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100" title="Apri un progetto .CMF">Apri file</button>
             <button type="button" onclick="openProjectsModal()" class="text-[11px] font-semibold text-indigo-700 px-2.5 py-1 rounded-full bg-indigo-50" title="Progetti cloud">Progetti</button>
-            <button type="button" onclick="saveCurrentProject()" class="text-[11px] font-semibold text-emerald-700 px-2.5 py-1 rounded-full bg-emerald-50" title="Salva nel cloud">Cloud</button>
-            <input type="file" id="project-open" accept=".json,application/json" class="hidden">
+            <button type="button" onclick="saveCurrentProject()" class="text-[11px] font-semibold text-emerald-700 px-2.5 py-1 rounded-full bg-emerald-50" title="Salva nel cloud (max 3)">Cloud</button>
+            <input type="file" id="project-open" accept=".cmf,.CMF,.json,application/json" class="hidden">
             <span class="w-px h-4 bg-gray-200 mx-1"></span>
             <button onclick="zoomOut()" class="w-8 h-8 rounded-full bg-gray-100 font-bold text-gray-600">−</button>
             <span id="zoom-level" class="text-xs font-bold w-12 text-center text-gray-600">100%</span>
@@ -194,11 +194,17 @@
                 <button onclick="closeProjectsModal()" class="w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 flex items-center justify-center text-xl leading-none">&times;</button>
             </div>
             <div class="px-6 py-4 border-b border-gray-100 bg-gray-50">
-                <label class="block text-xs font-semibold text-gray-600 mb-1">Salva come nuovo progetto</label>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                    <label class="block text-xs font-semibold text-gray-600">Salva come nuovo progetto cloud</label>
+                    <span id="cloud-slots-label" class="text-[11px] font-semibold text-gray-500">0 / 3</span>
+                </div>
                 <div class="flex gap-2">
                     <input type="text" id="new-project-name" class="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400" placeholder="Nome progetto…">
-                    <button onclick="saveAsNewProject()" class="bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-sm px-4 py-2 rounded-full whitespace-nowrap hover:opacity-90 transition">Salva nuovo</button>
+                    <button id="btn-save-new-cloud" onclick="saveAsNewProject()" class="bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-sm px-4 py-2 rounded-full whitespace-nowrap hover:opacity-90 transition disabled:opacity-40 disabled:pointer-events-none">Salva nuovo</button>
                 </div>
+                <p id="cloud-limit-hint" class="hidden mt-2 text-xs text-amber-800 bg-amber-50 rounded-xl px-3 py-2">
+                    Limite di 3 progetti cloud raggiunto. Eliminane uno oppure usa <button type="button" onclick="saveProjectFile(); closeProjectsModal();" class="font-semibold underline">Salva file .CMF</button>.
+                </p>
                 <p id="projects-feedback" class="hidden mt-2 text-sm rounded-xl px-3 py-2"></p>
             </div>
             <div id="projects-list" class="flex-1 overflow-y-auto px-4 py-3 space-y-2 min-h-[180px]">
