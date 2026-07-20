@@ -335,6 +335,34 @@
             ghostSize: 160
         };
 
+        // Pinch + rotate multitouch (mobile)
+        const pinchGesture = {
+            active: false,
+            obj: null,
+            startDist: 0,
+            startAngle: 0,
+            baseScaleX: 1,
+            baseScaleY: 1,
+            baseAngle: 0,
+            startMidCanvas: null,
+            baseCenter: null
+        };
+
+        function isMobileUI() {
+            return window.matchMedia('(hover: none) and (pointer: coarse)').matches
+                || (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900);
+        }
+
+        function updateMobileHint() {
+            const hint = document.getElementById('hint-toast');
+            if (!hint) return;
+            if (isMobileUI()) {
+                hint.innerHTML = 'Tieni premuto 1s sullo <strong>sfondo</strong> per spostare una pagina · Pinch/ruota sull’immagine selezionata';
+            } else {
+                hint.innerHTML = 'Tieni premuto 1s sullo <strong>sfondo</strong> di una pagina per trascinarla';
+            }
+        }
+
         // --- ROTAZIONE ---
         const rotateIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l5.85 5.85'/%3E%3C/svg%3E";
         const rotateImg = document.createElement('img');
@@ -387,6 +415,46 @@
             selection: true
         });
 
+        /** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
+        function configureObjectControls(obj) {
+            if (!obj || obj.isGuideLine || obj.isAlignmentLine) return;
+
+            if (isMobileUI()) {
+                obj.setControlsVisibility({
+                    tl: false, tr: false, bl: false, br: false,
+                    ml: false, mt: false, mr: false, mb: false,
+                    mtr: false,
+                    tlRotate: false, trRotate: false, blRotate: false, brRotate: false
+                });
+                obj.hasBorders = true;
+                return;
+            }
+
+            if (obj.isCropRect) {
+                obj.setControlsVisibility({
+                    tl: true, tr: true, bl: true, br: true,
+                    ml: true, mt: true, mr: true, mb: true,
+                    mtr: false,
+                    tlRotate: false, trRotate: false, blRotate: false, brRotate: false
+                });
+                return;
+            }
+
+            obj.setControlsVisibility({
+                tl: true, tr: true, bl: true, br: true,
+                ml: true, mt: true, mr: true, mb: true,
+                mtr: false,
+                tlRotate: true, trRotate: true, blRotate: true, brRotate: true
+            });
+        }
+
+        function configureAllObjectControls() {
+            canvas.getObjects().forEach(configureObjectControls);
+            const active = canvas.getActiveObject();
+            if (active) configureObjectControls(active);
+            canvas.requestRenderAll();
+        }
+
         // --- UNDO / REDO ---
         function initHistory() {
             historyStack = [];
@@ -434,6 +502,7 @@
                 canvas.renderAll();
                 isHistoryAction = false;
                 updateUndoRedoUI();
+                configureAllObjectControls();
                 updateToolbarPosition();
                 renderPagesUI();
                 applyZoom();
@@ -702,6 +771,8 @@
 
         window.addEventListener('resize', () => {
             centerStagePadding();
+            updateMobileHint();
+            configureAllObjectControls();
         });
 
         // --- TOOLBAR FLUTTUANTE ---
@@ -718,12 +789,22 @@
             toolbar.style.top = boundingRect.top + 'px';
         }
 
-        canvas.on('selection:created', updateToolbarPosition);
-        canvas.on('selection:updated', updateToolbarPosition);
+        function onSelectionControls(e) {
+            const obj = e && e.target ? e.target : canvas.getActiveObject();
+            if (obj) configureObjectControls(obj);
+            if (e && e.selected) e.selected.forEach(configureObjectControls);
+            updateToolbarPosition();
+        }
+
+        canvas.on('selection:created', onSelectionControls);
+        canvas.on('selection:updated', onSelectionControls);
         canvas.on('selection:cleared', updateToolbarPosition);
         canvas.on('object:moving', updateToolbarPosition);
         canvas.on('object:scaling', updateToolbarPosition);
         canvas.on('object:rotating', updateToolbarPosition);
+        canvas.on('object:added', (e) => {
+            if (e.target) configureObjectControls(e.target);
+        });
 
         function bringGuidesToFront() {
             canvas.getObjects().forEach(obj => {
@@ -1169,7 +1250,7 @@
         }
 
         canvas.on('mouse:down', function(opt) {
-            if (isCropping || pageDrag.active) return;
+            if (isCropping || pageDrag.active || pinchGesture.active) return;
             if (!isBackgroundTarget(opt.target)) return;
             if (squareCount < 2) return;
 
@@ -1232,19 +1313,151 @@
 
         // Evita menu contestuale durante long-press
         document.getElementById('canvas-wrapper').addEventListener('contextmenu', (e) => {
-            if (pageDrag.armed || pageDrag.active) e.preventDefault();
+            if (pageDrag.armed || pageDrag.active || pinchGesture.active) e.preventDefault();
         });
 
-        // Touch: previeni scroll durante armed long-press sul canvas
+        // --- MULTITOUCH: pinch (scale) + rotate su oggetto selezionato (mobile) ---
+        function touchDistance(t1, t2) {
+            return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        }
+
+        function touchAngleDeg(t1, t2) {
+            return Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
+        }
+
+        function clientToCanvasCoords(clientX, clientY) {
+            const wrapper = document.getElementById('canvas-wrapper');
+            const rect = wrapper.getBoundingClientRect();
+            return {
+                x: (clientX - rect.left) / currentZoom,
+                y: (clientY - rect.top) / currentZoom
+            };
+        }
+
+        function beginPinchGesture(t1, t2) {
+            const obj = canvas.getActiveObject();
+            if (!obj || obj.isGuideLine || obj.isAlignmentLine) return false;
+            // In crop: pinch solo sul rettangolo di ritaglio
+            if (isCropping && !obj.isCropRect) return false;
+
+            cancelLongPressArm();
+            if (canvas._currentTransform) {
+                canvas._currentTransform = null;
+            }
+
+            const mid = {
+                x: (t1.clientX + t2.clientX) / 2,
+                y: (t1.clientY + t2.clientY) / 2
+            };
+
+            pinchGesture.active = true;
+            pinchGesture.obj = obj;
+            pinchGesture.startDist = Math.max(1, touchDistance(t1, t2));
+            pinchGesture.startAngle = touchAngleDeg(t1, t2);
+            pinchGesture.baseScaleX = obj.scaleX || 1;
+            pinchGesture.baseScaleY = obj.scaleY || 1;
+            pinchGesture.baseAngle = obj.isCropRect ? 0 : (obj.angle || 0);
+            pinchGesture.startMidCanvas = clientToCanvasCoords(mid.x, mid.y);
+            pinchGesture.baseCenter = obj.getCenterPoint();
+            return true;
+        }
+
+        function updatePinchGesture(t1, t2) {
+            if (!pinchGesture.active || !pinchGesture.obj) return;
+            const obj = pinchGesture.obj;
+            const dist = Math.max(1, touchDistance(t1, t2));
+            const factor = dist / pinchGesture.startDist;
+
+            const scaleX = Math.max(0.05, pinchGesture.baseScaleX * factor);
+            const scaleY = Math.max(0.05, pinchGesture.baseScaleY * factor);
+
+            if (obj.isCropRect) {
+                // Crop: solo scale uniforme, niente rotazione
+                obj.set({ scaleX, scaleY, angle: 0 });
+            } else {
+                let angle = pinchGesture.baseAngle + (touchAngleDeg(t1, t2) - pinchGesture.startAngle);
+                const snapped = Math.round(angle / 5) * 5;
+                if (Math.abs(angle - snapped) < 3) angle = snapped;
+                obj.set({ scaleX, scaleY, angle });
+            }
+
+            const mid = {
+                x: (t1.clientX + t2.clientX) / 2,
+                y: (t1.clientY + t2.clientY) / 2
+            };
+            const midCanvas = clientToCanvasCoords(mid.x, mid.y);
+            const dx = midCanvas.x - pinchGesture.startMidCanvas.x;
+            const dy = midCanvas.y - pinchGesture.startMidCanvas.y;
+            obj.setPositionByOrigin(
+                new fabric.Point(pinchGesture.baseCenter.x + dx, pinchGesture.baseCenter.y + dy),
+                'center',
+                'center'
+            );
+            obj.setCoords();
+            canvas.requestRenderAll();
+            updateToolbarPosition();
+        }
+
+        function endPinchGesture(commit) {
+            if (!pinchGesture.active) return;
+            const obj = pinchGesture.obj;
+            pinchGesture.active = false;
+            pinchGesture.obj = null;
+            if (commit && obj) {
+                obj.setCoords();
+                // object:modified → saveState automatico
+                canvas.fire('object:modified', { target: obj });
+            }
+            canvas.requestRenderAll();
+            updateToolbarPosition();
+        }
+
         const upperCanvas = canvas.upperCanvasEl;
-        upperCanvas.addEventListener('touchstart', () => {}, { passive: true });
+
+        upperCanvas.addEventListener('touchstart', (e) => {
+            if (!isMobileUI()) return;
+
+            if (e.touches.length >= 2) {
+                if (beginPinchGesture(e.touches[0], e.touches[1])) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                return;
+            }
+
+            // Un dito: se c'è selezione e tocchiamo l'oggetto, nessun long-press pagina
+            if (e.touches.length === 1 && canvas.getActiveObject() && !isBackgroundTarget(canvas.findTarget(e, false))) {
+                cancelLongPressArm();
+            }
+        }, { passive: false, capture: true });
+
         upperCanvas.addEventListener('touchmove', (e) => {
+            if (pinchGesture.active && e.touches.length >= 2) {
+                e.preventDefault();
+                e.stopPropagation();
+                updatePinchGesture(e.touches[0], e.touches[1]);
+                return;
+            }
             if (pageDrag.armed || pageDrag.active) {
                 e.preventDefault();
             }
-        }, { passive: false });
-        upperCanvas.addEventListener('touchend', onPointerUp);
-        upperCanvas.addEventListener('touchcancel', cancelPageDrag);
+        }, { passive: false, capture: true });
+
+        upperCanvas.addEventListener('touchend', (e) => {
+            if (pinchGesture.active) {
+                if (e.touches.length < 2) {
+                    e.preventDefault();
+                    endPinchGesture(true);
+                }
+                return;
+            }
+            onPointerUp();
+        }, { passive: false, capture: true });
+
+        upperCanvas.addEventListener('touchcancel', () => {
+            if (pinchGesture.active) endPinchGesture(false);
+            cancelPageDrag();
+        }, { capture: true });
 
         // --- BG / UPLOAD / DELETE ---
         document.getElementById('bg-color').addEventListener('input', function(e) {
@@ -1297,7 +1510,10 @@
 
         window.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            if (e.key === 'Escape') cancelPageDrag();
+            if (e.key === 'Escape') {
+                if (pinchGesture.active) endPinchGesture(false);
+                cancelPageDrag();
+            }
             if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
             if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); redo(); }
@@ -1411,17 +1627,17 @@
         });
 
         // --- BOOT ---
+        updateMobileHint();
         renderPagesUI();
         if (!restoreProject()) {
             initHistory();
             fitToScreen();
-        } else {
-            // fitToScreen chiamato nel callback di restore
+            configureAllObjectControls();
         }
 
-        // Se restore è sync-false path, assicurati fit dopo paint
         requestAnimationFrame(() => {
             if (!localStorage.getItem(STORAGE_KEY)) fitToScreen();
+            configureAllObjectControls();
         });
     </script>
 </body>
