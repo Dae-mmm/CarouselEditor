@@ -481,8 +481,13 @@
             if (isMobileUI()) {
                 hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per spostare la vista · Tieni 1s per riordinare · Pinch sull’immagine';
             } else {
-                hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per muovere la vista · Tieni premuto 1s per spostare una pagina';
+                hint.innerHTML = 'Trascina sullo <strong>sfondo</strong> per selezione multipla · Tieni 1s per spostare una pagina';
             }
+        }
+
+        function applyInteractionMode() {
+            // Marquee / selezione multipla solo su PC; su mobile il drag sullo sfondo fa pan
+            canvas.selection = !isMobileUI();
         }
 
         // --- ROTAZIONE ---
@@ -664,7 +669,7 @@
         }
 
         function handleSnapping(e) {
-            if (pageDrag.active || pageDrag.armed) return;
+            if (pageDrag.active || pageDrag.armed || viewPan.active) return;
             const obj = e.target;
             if (!obj || obj.isCropping) return;
             if (e.e && e.e.altKey) { clearGuidelines(); return; }
@@ -773,7 +778,7 @@
         canvas.on('object:scaling', handleSnapping);
 
         canvas.on('mouse:up', function() {
-            if (pageDrag.active || pageDrag.armed) return;
+            if (pageDrag.active || pageDrag.armed || viewPan.active) return;
             const obj = canvas.getActiveObject();
             let didSnap = false;
             if (obj && pendingSnapMove) {
@@ -899,6 +904,7 @@
         window.addEventListener('resize', () => {
             centerStagePadding();
             updateMobileHint();
+            applyInteractionMode();
             configureAllObjectControls();
         });
 
@@ -1483,7 +1489,7 @@
                 o.selectable = true;
                 o.evented = true;
             });
-            canvas.selection = true;
+            canvas.selection = !isMobileUI();
             canvas.renderAll();
         }
 
@@ -1505,16 +1511,20 @@
             const pointer = canvas.getPointer(opt.e);
             const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / pageW)));
 
-            // Prepara pan (drag veloce) e, se ci sono più pagine, long-press per riordinare
-            viewPan.pending = true;
-            viewPan.startClientX = pt.x;
-            viewPan.startClientY = pt.y;
-            viewPan.startScrollLeft = workspace.scrollLeft;
-            viewPan.startScrollTop = workspace.scrollTop;
-
             pageDrag.startClientX = pt.x;
             pageDrag.startClientY = pt.y;
             pageDrag.fromIndex = pageIndex;
+
+            // Pan con drag veloce: solo mobile (su PC il drag serve alla selezione multipla)
+            if (isMobileUI()) {
+                viewPan.pending = true;
+                viewPan.startClientX = pt.x;
+                viewPan.startClientY = pt.y;
+                viewPan.startScrollLeft = workspace.scrollLeft;
+                viewPan.startScrollTop = workspace.scrollTop;
+            } else {
+                viewPan.pending = false;
+            }
 
             if (squareCount >= 2) {
                 pageDrag.armed = true;
@@ -1539,16 +1549,18 @@
             }
 
             if ((pageDrag.armed || viewPan.pending) && !pageDrag.active) {
-                const dx = pt.x - (pageDrag.armed ? pageDrag.startClientX : viewPan.startClientX);
-                const dy = pt.y - (pageDrag.armed ? pageDrag.startClientY : viewPan.startClientY);
+                const startX = viewPan.pending ? viewPan.startClientX : pageDrag.startClientX;
+                const startY = viewPan.pending ? viewPan.startClientY : pageDrag.startClientY;
+                const dx = pt.x - startX;
+                const dy = pt.y - startY;
                 if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOL) {
                     cancelLongPressArm();
-                    beginViewPan({
-                        x: pageDrag.armed ? pageDrag.startClientX : viewPan.startClientX,
-                        y: pageDrag.armed ? pageDrag.startClientY : viewPan.startClientY
-                    });
-                    // riallinea allo scroll iniziale e applica delta corrente
-                    updateViewPan(pt);
+                    if (viewPan.pending && isMobileUI()) {
+                        beginViewPan();
+                        updateViewPan(pt);
+                    } else {
+                        viewPan.pending = false;
+                    }
                 }
                 return;
             }
@@ -1946,6 +1958,7 @@
 
         // --- BOOT ---
         updateMobileHint();
+        applyInteractionMode();
         updateAspectToggleUI();
         document.querySelectorAll('#aspect-toggle .aspect-btn').forEach(btn => {
             btn.addEventListener('click', () => setAspectRatio(btn.dataset.aspect));
@@ -1959,6 +1972,7 @@
 
         requestAnimationFrame(() => {
             if (!localStorage.getItem(STORAGE_KEY)) fitToScreen();
+            applyInteractionMode();
             configureAllObjectControls();
         });
     </script>
