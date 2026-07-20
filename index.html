@@ -121,6 +121,25 @@
             color: #4f46e5;
             box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
         }
+        .aspect-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 32px;
+            padding: 0;
+            border-radius: 999px;
+            color: #6b7280;
+        }
+        .aspect-icon {
+            display: block;
+            border: 2px solid currentColor;
+            border-radius: 2px;
+            box-sizing: border-box;
+        }
+        .aspect-icon--portrait { width: 10px; height: 14px; }
+        .aspect-icon--square { width: 12px; height: 12px; }
+        .aspect-icon--landscape { width: 16px; height: 9px; }
 
         /* Ghost pagina durante drag */
         #page-ghost {
@@ -234,9 +253,15 @@
     <!-- Indicatori pagine + formato -->
     <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
         <div id="aspect-toggle" class="inline-flex items-center bg-gray-100 rounded-full p-0.5" role="group" aria-label="Formato pagina">
-            <button type="button" data-aspect="3:4" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition">3:4</button>
-            <button type="button" data-aspect="1:1" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition is-active">1:1</button>
-            <button type="button" data-aspect="4:3" class="aspect-btn px-3 py-1.5 rounded-full text-xs font-bold text-gray-600 transition">4:3</button>
+            <button type="button" data-aspect="4:5" class="aspect-btn transition" title="Verticale 4:5" aria-label="Verticale 4:5">
+                <span class="aspect-icon aspect-icon--portrait" aria-hidden="true"></span>
+            </button>
+            <button type="button" data-aspect="1:1" class="aspect-btn transition is-active" title="Quadrato 1:1" aria-label="Quadrato 1:1">
+                <span class="aspect-icon aspect-icon--square" aria-hidden="true"></span>
+            </button>
+            <button type="button" data-aspect="1.91:1" class="aspect-btn transition" title="Orizzontale 1.91:1" aria-label="Orizzontale 1.91:1">
+                <span class="aspect-icon aspect-icon--landscape" aria-hidden="true"></span>
+            </button>
         </div>
         <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
         <div class="flex items-center gap-3 text-xs text-gray-500">
@@ -311,14 +336,18 @@
     <div id="page-ghost"><img alt=""></div>
 
     <script>
-        // Formati pagina: 1:1 = 1080²; 4:3 / 3:4 con lato lungo 1350
+        // Formati Instagram: verticale 4:5, quadrato 1:1, orizzontale 1.91:1
         const ASPECT_PRESETS = {
-            '3:4': { w: 1013, h: 1350 },
+            '4:5': { w: 1080, h: 1350 },
             '1:1': { w: 1080, h: 1080 },
-            '4:3': { w: 1350, h: 1013 }
+            '1.91:1': { w: 1080, h: 566 }
+        };
+        const ASPECT_ALIASES = {
+            '3:4': '4:5',
+            '4:3': '1.91:1'
         };
         const MAX_IMAGE_SHORT_SIDE = 1350;
-        const STORAGE_KEY = 'carousel-maker-project-v3';
+        const STORAGE_KEY = 'carousel-maker-project-v4';
         const LONG_PRESS_MS = 1000;
         const LONG_PRESS_MOVE_TOL = 14;
 
@@ -327,6 +356,12 @@
         let pageH = ASPECT_PRESETS['1:1'].h;
         let squareCount = 1;
         let guideLines = [];
+
+        function resolveAspectKey(key) {
+            if (ASPECT_PRESETS[key]) return key;
+            if (ASPECT_ALIASES[key] && ASPECT_PRESETS[ASPECT_ALIASES[key]]) return ASPECT_ALIASES[key];
+            return '1:1';
+        }
 
         let historyStack = [];
         let historyIndex = -1;
@@ -513,8 +548,8 @@
 
         function loadHistoryState(state) {
             isHistoryAction = true;
-            if (state.aspectRatio && ASPECT_PRESETS[state.aspectRatio]) {
-                aspectRatio = state.aspectRatio;
+            if (state.aspectRatio) {
+                aspectRatio = resolveAspectKey(state.aspectRatio);
                 pageW = ASPECT_PRESETS[aspectRatio].w;
                 pageH = ASPECT_PRESETS[aspectRatio].h;
                 updateAspectToggleUI();
@@ -978,10 +1013,11 @@
         }
 
         /**
-         * Cambia formato pagina (3:4 / 1:1 / 4:3).
+         * Cambia formato pagina: verticale 4:5, quadrato 1:1, orizzontale 1.91:1.
          * Rimappa posizione e scala degli oggetti rispetto alle nuove dimensioni.
          */
         function setAspectRatio(next) {
+            next = resolveAspectKey(next);
             if (!ASPECT_PRESETS[next] || isCropping || pageDrag.active || pinchGesture.active) return;
             if (next === aspectRatio) {
                 updateAspectToggleUI();
@@ -1682,8 +1718,8 @@
                 isHistoryAction = true;
                 canvas.loadFromJSON(payload.json, function() {
                     squareCount = payload.squareCount || 1;
-                    if (payload.aspectRatio && ASPECT_PRESETS[payload.aspectRatio]) {
-                        aspectRatio = payload.aspectRatio;
+                    if (payload.aspectRatio) {
+                        aspectRatio = resolveAspectKey(payload.aspectRatio);
                         pageW = ASPECT_PRESETS[aspectRatio].w;
                         pageH = ASPECT_PRESETS[aspectRatio].h;
                         updateAspectToggleUI();
