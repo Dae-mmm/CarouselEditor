@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#4f46e5">
     <meta name="description" content="Crea e esporti carousel Instagram. Funziona offline come Progressive Web App.">
     <meta name="mobile-web-app-capable" content="yes">
@@ -19,18 +19,49 @@
         :root {
             --brand: #4f46e5;
             --brand-soft: #eef2ff;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-top: env(safe-area-inset-top, 0px);
+            --dock-h: 72px;
         }
+
+        * { -webkit-tap-highlight-color: transparent; }
+
+        html, body {
+            height: 100%;
+            overscroll-behavior: none;
+        }
+
+        body {
+            padding-top: var(--safe-top);
+            background: #f3f4f6;
+        }
+
         #workspace {
-            background-color: #f3f4f6;
-            background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb),
-                              linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb);
-            background-size: 20px 20px;
-            background-position: 0 0, 10px 10px;
+            background-color: #eceff3;
+            background-image:
+                linear-gradient(45deg, #e2e5ea 25%, transparent 25%, transparent 75%, #e2e5ea 75%, #e2e5ea),
+                linear-gradient(45deg, #e2e5ea 25%, transparent 25%, transparent 75%, #e2e5ea 75%, #e2e5ea);
+            background-size: 18px 18px;
+            background-position: 0 0, 9px 9px;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-x pan-y;
         }
-        #workspace::-webkit-scrollbar { height: 12px; width: 12px; }
-        #workspace::-webkit-scrollbar-track { background: #f1f1f1; }
+
+        #workspace::-webkit-scrollbar { height: 8px; width: 8px; }
         #workspace::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 6px; }
-        #workspace::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+        #canvas-stage {
+            /* Spazio virtuale centrato: padding dinamico via JS per centrare 1 pagina */
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100%;
+        }
+
+        #canvas-wrapper {
+            transform-origin: top left;
+            will-change: transform;
+        }
 
         .tool-btn { position: relative; }
         .tool-btn:hover::after {
@@ -49,128 +80,223 @@
             z-index: 60;
         }
 
-        .page-chip {
-            touch-action: none;
-            user-select: none;
-            cursor: grab;
-        }
-        .page-chip:active { cursor: grabbing; }
-        .page-chip.dragging {
-            opacity: 0.55;
-            transform: scale(0.97);
-        }
-        .page-chip.drag-over {
-            box-shadow: inset 3px 0 0 #4f46e5;
-        }
-        .page-chip.drag-over-right {
-            box-shadow: inset -3px 0 0 #4f46e5;
-        }
+        #install-banner { display: none; }
+        #install-banner.show { display: flex; }
 
-        #install-banner {
-            display: none;
-        }
-        #install-banner.show {
+        #offline-badge { display: none; }
+        #offline-badge.show { display: inline-flex; }
+
+        .dock-btn {
             display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            min-width: 52px;
+            padding: 6px 8px;
+            border-radius: 14px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #374151;
+            transition: background 0.15s;
+        }
+        .dock-btn:active { background: #f3f4f6; }
+        .dock-btn:disabled { opacity: 0.35; }
+        .dock-btn .ico { font-size: 20px; line-height: 1; }
+
+        .page-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #c7cdd6;
+            transition: all 0.2s;
+        }
+        .page-dot.active {
+            width: 22px;
+            background: var(--brand);
         }
 
-        #offline-badge {
+        /* Ghost pagina durante drag */
+        #page-ghost {
             display: none;
+            position: fixed;
+            z-index: 80;
+            pointer-events: none;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.35);
+            border: 3px solid #4f46e5;
+            opacity: 0.92;
+            transform: translate(-50%, -50%) scale(0.85);
         }
-        #offline-badge.show {
-            display: inline-flex;
+        #page-ghost.show { display: block; }
+        #page-ghost img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+        #page-insert-line {
+            display: none;
+            position: absolute;
+            top: 0;
+            width: 4px;
+            height: 100%;
+            background: #4f46e5;
+            border-radius: 4px;
+            z-index: 25;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.25);
+            pointer-events: none;
+            transform: translateX(-50%);
+        }
+        #page-insert-line.show { display: block; }
+
+        #page-drag-dim {
+            display: none;
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: rgba(15, 23, 42, 0.28);
+            z-index: 20;
+            pointer-events: none;
+            border-radius: 0;
+        }
+        #page-drag-dim.show { display: block; }
+
+        #longpress-ring {
+            display: none;
+            position: fixed;
+            z-index: 70;
+            width: 56px;
+            height: 56px;
+            margin: -28px 0 0 -28px;
+            border-radius: 50%;
+            border: 3px solid rgba(79, 70, 229, 0.25);
+            pointer-events: none;
+        }
+        #longpress-ring.show { display: block; }
+        #longpress-ring::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 3px solid transparent;
+            border-top-color: #4f46e5;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        body.page-dragging {
+            user-select: none;
+            cursor: grabbing;
+        }
+        body.page-dragging #workspace {
+            touch-action: none;
         }
 
-        @media (max-width: 900px) {
-            header .hide-sm { display: none !important; }
+        #hint-toast {
+            pointer-events: none;
         }
     </style>
 </head>
-<body class="h-screen w-full flex flex-col font-sans overflow-hidden bg-gray-50">
+<body class="h-[100dvh] w-full flex flex-col font-sans overflow-hidden">
 
     <!-- Banner installazione PWA -->
     <div id="install-banner" class="items-center justify-between gap-3 px-4 py-2 bg-indigo-600 text-white text-sm z-40">
-        <span>Installa <strong>Carousel Maker</strong> per usarlo offline come app.</span>
+        <span class="text-center flex-1">Installa <strong>Carousel Maker</strong> per usarlo offline.</span>
         <div class="flex items-center gap-2 shrink-0">
-            <button id="btn-install" class="bg-white text-indigo-700 font-semibold px-3 py-1 rounded-full hover:bg-indigo-50 transition">Installa</button>
-            <button id="btn-dismiss-install" class="text-white/80 hover:text-white px-2" aria-label="Chiudi">✕</button>
+            <button id="btn-install" class="bg-white text-indigo-700 font-semibold px-3 py-1 rounded-full">Installa</button>
+            <button id="btn-dismiss-install" class="text-white/80 px-2" aria-label="Chiudi">✕</button>
         </div>
     </div>
 
-    <!-- Topbar -->
-    <header class="w-full bg-white shadow-sm border-b border-gray-200 flex items-center justify-between px-4 sm:px-6 py-3 z-30 relative gap-2">
-        <div class="flex items-center gap-3 min-w-0">
-            <h1 class="text-lg sm:text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-pink-500 shrink-0">Carousel<span class="text-gray-800">Maker</span></h1>
-            <span id="offline-badge" class="items-center gap-1 text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">Offline</span>
-            <div class="h-6 w-px bg-gray-300 mx-1 hide-sm"></div>
-            <button id="btn-undo" onclick="undo()" disabled class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 disabled:opacity-30 transition" title="Annulla">↩️</button>
-            <button id="btn-redo" onclick="redo()" disabled class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 disabled:opacity-30 transition" title="Ripeti">↪️</button>
+    <!-- Header compatto, centrato -->
+    <header class="w-full bg-white/95 backdrop-blur border-b border-gray-200 z-30 px-3 py-2.5 flex flex-col items-center gap-1">
+        <div class="flex items-center gap-2">
+            <h1 class="text-lg font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 to-pink-500">Carousel<span class="text-gray-800">Maker</span></h1>
+            <span id="offline-badge" class="items-center text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">Offline</span>
         </div>
+        <p id="hint-toast" class="text-[11px] text-gray-500 text-center leading-tight px-2">
+            Tieni premuto 1s sullo <strong>sfondo</strong> di una pagina per trascinarla
+        </p>
+    </header>
 
-        <div class="flex items-center gap-3 sm:gap-6 flex-wrap justify-end">
-            <div class="flex items-center hide-sm">
-                <span class="text-sm font-semibold text-gray-700 mr-2">BG:</span>
-                <div class="relative flex items-center justify-center w-9 h-9 rounded-full border border-gray-300 overflow-hidden cursor-pointer shadow-sm hover:scale-105 transition" title="Colore di Sfondo">
-                    <div id="bg-color-icon" class="w-full h-full bg-white pointer-events-none"></div>
-                    <input type="color" id="bg-color" value="#ffffff" class="absolute opacity-0 w-16 h-16 cursor-pointer left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2">
+    <!-- Indicatori pagine (solo navigazione) -->
+    <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
+        <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
+        <div class="flex items-center gap-3 text-xs text-gray-500">
+            <span id="page-label" class="font-semibold text-gray-700">Pagina 1 / 1</span>
+            <button type="button" onclick="deleteCurrentPage()" id="btn-delete-page" class="text-red-500 font-semibold disabled:opacity-30" disabled>Elimina</button>
+        </div>
+    </div>
+
+    <!-- Area di Lavoro centrata -->
+    <div id="workspace" class="flex-1 relative overflow-auto">
+        <div id="canvas-stage" class="relative">
+            <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
+                <canvas id="canvas"></canvas>
+                <div id="page-drag-dim"></div>
+                <div id="page-insert-line"></div>
+
+                <button onclick="addSquare()" title="Aggiungi pagina" class="absolute top-1/2 -right-14 -translate-y-1/2 w-11 h-11 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-2xl text-indigo-600 active:scale-95 z-10">
+                    +
+                    <span id="square-badge" class="absolute -top-1 -right-1 bg-indigo-600 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">1</span>
+                </button>
+
+                <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
+                    <div id="normal-tools" class="flex gap-1 items-center">
+                        <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg">✂️</button>
+                        <div class="w-px h-6 bg-gray-300 mx-1"></div>
+                        <button onclick="changeLayer('bottom')" data-tooltip="In fondo" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⏬</button>
+                        <button onclick="changeLayer('down')" data-tooltip="Sotto" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⬇️</button>
+                        <button onclick="changeLayer('up')" data-tooltip="Sopra" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⬆️</button>
+                        <button onclick="changeLayer('top')" data-tooltip="In cima" class="tool-btn w-9 h-9 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-base">⏫</button>
+                    </div>
+                    <div id="crop-tools" class="hidden flex gap-2 items-center">
+                        <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm">✓</button>
+                        <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm">✗</button>
+                    </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dock inferiore mobile-centered -->
+    <nav class="w-full bg-white border-t border-gray-200 z-30 px-1 pt-1" style="padding-bottom: calc(6px + var(--safe-bottom));">
+        <div class="max-w-lg mx-auto flex items-stretch justify-between gap-0.5 overflow-x-auto no-scrollbar">
+            <button id="btn-undo" onclick="undo()" disabled class="dock-btn" title="Annulla"><span class="ico">↩️</span>Annulla</button>
+            <button id="btn-redo" onclick="redo()" disabled class="dock-btn" title="Ripeti"><span class="ico">↪️</span>Ripeti</button>
+
+            <div class="dock-btn relative" title="Sfondo">
+                <span class="ico relative w-6 h-6 rounded-full border border-gray-300 overflow-hidden block">
+                    <span id="bg-color-icon" class="absolute inset-0 bg-white"></span>
+                </span>
+                Sfondo
+                <input type="color" id="bg-color" value="#ffffff" class="absolute inset-0 opacity-0 cursor-pointer">
             </div>
 
             <input type="file" id="image-upload" accept="image/*" class="hidden" multiple>
-            <button onclick="document.getElementById('image-upload').click()" class="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2 px-3 sm:px-5 rounded-full transition text-sm">
-                <span>🖼️</span> <span class="hide-sm">Carica Foto</span>
-            </button>
+            <button onclick="document.getElementById('image-upload').click()" class="dock-btn" title="Carica"><span class="ico">🖼️</span>Foto</button>
 
-            <div class="flex items-center gap-2 bg-gray-100 rounded-full px-2 py-1 shadow-inner">
-                <button onclick="zoomOut()" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm font-bold text-gray-600 transition">-</button>
-                <span id="zoom-level" class="text-xs font-bold w-12 text-center text-gray-700">100%</span>
-                <button onclick="zoomIn()" class="w-7 h-7 flex items-center justify-center rounded-full hover:bg-white hover:shadow-sm font-bold text-gray-600 transition">+</button>
-            </div>
+            <button onclick="addSquare()" class="dock-btn text-indigo-600" title="Aggiungi pagina"><span class="ico">➕</span>Pagina</button>
 
-            <button onclick="deleteSelected()" class="w-10 h-10 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-full transition" title="Elimina Livello Selezionato (CANC)">🗑️</button>
-            <button onclick="exportCarousel()" class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold py-2 px-4 sm:px-6 rounded-full shadow-md transition transform hover:-translate-y-0.5 text-sm">
-                Esporta
-            </button>
+            <button onclick="deleteSelected()" class="dock-btn text-red-500" title="Elimina selezione"><span class="ico">🗑️</span>Elimina</button>
+
+            <button onclick="exportCarousel()" class="dock-btn text-indigo-700" title="Esporta"><span class="ico">📤</span>Esporta</button>
         </div>
-    </header>
-
-    <!-- Barra Pagine: riordina trascinando -->
-    <div class="bg-white border-b border-gray-200 px-4 py-2 z-20 flex items-center gap-3 overflow-x-auto">
-        <span class="text-xs font-bold uppercase tracking-wide text-gray-500 shrink-0">Pagine</span>
-        <div id="pages-list" class="flex items-center gap-2 min-h-[40px]"></div>
-        <button onclick="addSquare()" title="Aggiungi pagina" class="shrink-0 w-9 h-9 rounded-full border-2 border-dashed border-indigo-300 text-indigo-600 font-bold hover:bg-indigo-50 transition flex items-center justify-center">+</button>
-        <p class="text-[11px] text-gray-400 ml-auto hide-sm shrink-0">Trascina per riordinare · l’immagine segue la pagina del suo angolo in alto a sinistra</p>
-    </div>
-
-    <!-- Area di Lavoro -->
-    <div id="workspace" class="flex-1 relative overflow-auto p-8 sm:p-12 flex items-start justify-start">
-        <div id="canvas-wrapper" class="origin-top-left shadow-2xl transition-transform duration-200 relative" style="width: 1080px; height: 1080px;">
-            <canvas id="canvas"></canvas>
-
-            <button onclick="addSquare()" title="Aggiungi una pagina" class="absolute top-1/2 -right-16 sm:-right-20 transform -translate-y-1/2 w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-3xl text-blue-600 hover:bg-blue-50 hover:scale-110 transition-all z-10 group">
-                +
-                <span id="square-badge" class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-sm group-hover:scale-110 transition">1</span>
-            </button>
-
-            <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200 transition-opacity" style="display: none; transform: translate(-100%, calc(-100% - 15px));">
-                <div id="normal-tools" class="flex gap-1 items-center">
-                    <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">✂️</button>
-                    <div class="w-px h-6 bg-gray-300 mx-1"></div>
-                    <button onclick="changeLayer('bottom')" data-tooltip="Sposta in fondo" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⏬</button>
-                    <button onclick="changeLayer('down')" data-tooltip="Sposta sotto" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⬇️</button>
-                    <button onclick="changeLayer('up')" data-tooltip="Sposta sopra" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⬆️</button>
-                    <button onclick="changeLayer('top')" data-tooltip="Sposta in cima" class="tool-btn w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-200 flex items-center justify-center text-lg transition-colors">⏫</button>
-                </div>
-                <div id="crop-tools" class="hidden flex gap-2 items-center">
-                    <button onclick="applyCrop()" class="px-4 py-2 bg-green-500 text-white rounded-full hover:bg-green-600 font-bold text-sm shadow-md transition-colors">✓ Applica</button>
-                    <button onclick="cancelCrop()" class="px-4 py-2 bg-red-500 text-white rounded-full hover:bg-red-600 font-bold text-sm shadow-md transition-colors">✗ Annulla</button>
-                </div>
-            </div>
+        <div class="max-w-lg mx-auto flex items-center justify-center gap-3 mt-1 pb-0.5">
+            <button onclick="zoomOut()" class="w-8 h-8 rounded-full bg-gray-100 font-bold text-gray-600">−</button>
+            <span id="zoom-level" class="text-xs font-bold w-12 text-center text-gray-600">100%</span>
+            <button onclick="zoomIn()" class="w-8 h-8 rounded-full bg-gray-100 font-bold text-gray-600">+</button>
+            <button onclick="fitToScreen()" class="text-[11px] font-semibold text-indigo-600 px-2 py-1 rounded-full bg-indigo-50">Adatta</button>
         </div>
-    </div>
+    </nav>
+
+    <div id="longpress-ring"></div>
+    <div id="page-ghost"><img alt=""></div>
 
     <script>
         const SQUARE_SIZE = 1080;
         const STORAGE_KEY = 'carousel-maker-project-v1';
+        const LONG_PRESS_MS = 1000;
+        const LONG_PRESS_MOVE_TOL = 14;
+
         let squareCount = 1;
         let guideLines = [];
 
@@ -186,10 +312,22 @@
         const MAX_ZOOM = 3;
         const MIN_ZOOM = 0.1;
 
-        let dragPageFrom = null;
         let deferredInstallPrompt = null;
+        let currentVisiblePage = 0;
 
-        // --- ROTAZIONE AVANZATA ---
+        // --- Long-press page drag state ---
+        const pageDrag = {
+            timer: null,
+            armed: false,      // timer running
+            active: false,     // dragging page
+            fromIndex: null,
+            insertAt: null,    // insertion index 0..squareCount (slot before page i, or end)
+            startClientX: 0,
+            startClientY: 0,
+            ghostSize: 160
+        };
+
+        // --- ROTAZIONE ---
         const rotateIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.59-9.21l5.85 5.85'/%3E%3C/svg%3E";
         const rotateImg = document.createElement('img');
         rotateImg.src = rotateIcon;
@@ -198,7 +336,7 @@
             const size = 16;
             ctx.save();
             ctx.translate(left, top);
-            ctx.drawImage(rotateImg, -size/2, -size/2, size, size);
+            ctx.drawImage(rotateImg, -size / 2, -size / 2, size, size);
             ctx.restore();
         }
 
@@ -206,7 +344,7 @@
             transparentCorners: false,
             cornerColor: '#3b82f6',
             borderColor: '#3b82f6',
-            cornerSize: 12,
+            cornerSize: 14,
             padding: 0,
             cornerStyle: 'circle',
             snapAngle: 5,
@@ -219,7 +357,7 @@
             let x = corner.includes('l') ? -0.5 : 0.5;
             let y = corner.includes('t') ? -0.5 : 0.5;
             fabric.Object.prototype.controls[corner + 'Rotate'] = new fabric.Control({
-                x: x, y: y,
+                x, y,
                 offsetX: x * rotOffset, offsetY: y * rotOffset,
                 cursorStyle: 'alias',
                 actionHandler: fabric.controlsUtils.rotationWithSnapping,
@@ -236,7 +374,9 @@
             backgroundColor: '#ffffff',
             preserveObjectStacking: true,
             uniformScaling: false,
-            uniScaleKey: 'shiftKey'
+            uniScaleKey: 'shiftKey',
+            allowTouchScrolling: true,
+            selection: true
         });
 
         // --- UNDO / REDO ---
@@ -247,13 +387,10 @@
         }
 
         function saveState() {
-            if (isHistoryAction || isCropping) return;
+            if (isHistoryAction || isCropping || pageDrag.active) return;
             historyStack = historyStack.slice(0, historyIndex + 1);
             const json = canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']);
-            historyStack.push({
-                json: json,
-                squareCount: squareCount
-            });
+            historyStack.push({ json, squareCount });
             historyIndex++;
             updateUndoRedoUI();
             persistProject();
@@ -265,14 +402,14 @@
         }
 
         function undo() {
-            if (historyIndex > 0 && !isCropping) {
+            if (historyIndex > 0 && !isCropping && !pageDrag.active) {
                 historyIndex--;
                 loadHistoryState(historyStack[historyIndex]);
             }
         }
 
         function redo() {
-            if (historyIndex < historyStack.length - 1 && !isCropping) {
+            if (historyIndex < historyStack.length - 1 && !isCropping && !pageDrag.active) {
                 historyIndex++;
                 loadHistoryState(historyStack[historyIndex]);
             }
@@ -290,7 +427,7 @@
                 isHistoryAction = false;
                 updateUndoRedoUI();
                 updateToolbarPosition();
-                renderPagesBar();
+                renderPagesUI();
                 applyZoom();
                 persistProject();
             });
@@ -298,10 +435,10 @@
 
         canvas.on('object:modified', saveState);
         canvas.on('object:added', (e) => {
-            if(!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
+            if (!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
         });
         canvas.on('object:removed', (e) => {
-            if(!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
+            if (!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
         });
 
         // --- SMART GUIDES ---
@@ -320,52 +457,36 @@
         }
 
         function handleSnapping(e) {
+            if (pageDrag.active || pageDrag.armed) return;
             const obj = e.target;
             if (!obj || obj.isCropping) return;
-
-            if (e.e.altKey) {
-                clearGuidelines();
-                return;
-            }
+            if (e.e && e.e.altKey) { clearGuidelines(); return; }
 
             const action = e.transform ? e.transform.action : '';
             const isMoving = action === 'drag';
             const isScaling = action.includes('scale');
-
-            if (!isMoving && !isScaling) {
-                clearGuidelines();
-                return;
-            }
+            if (!isMoving && !isScaling) { clearGuidelines(); return; }
 
             const objBounds = obj.getBoundingRect();
             const objCenter = obj.getCenterPoint();
-
             const targets = [];
             canvas.getObjects().forEach(t => {
                 if (t === obj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
                 const bounds = t.getBoundingRect();
                 const center = t.getCenterPoint();
                 targets.push({
-                    left: bounds.left,
-                    centerX: center.x,
-                    right: bounds.left + bounds.width,
-                    top: bounds.top,
-                    centerY: center.y,
-                    bottom: bounds.top + bounds.height,
+                    left: bounds.left, centerX: center.x, right: bounds.left + bounds.width,
+                    top: bounds.top, centerY: center.y, bottom: bounds.top + bounds.height
                 });
             });
-
-            if (targets.length === 0) return;
+            if (!targets.length) return;
 
             let linesToDraw = [];
 
             if (isMoving) {
-                let snapX = null;
-                let snapY = null;
-                let diffX = SNAP_DISTANCE + 1;
-                let diffY = SNAP_DISTANCE + 1;
-                let finalLeft = obj.left;
-                let finalTop = obj.top;
+                let snapX = null, snapY = null;
+                let diffX = SNAP_DISTANCE + 1, diffY = SNAP_DISTANCE + 1;
+                let finalLeft = obj.left, finalTop = obj.top;
 
                 targets.forEach(t => {
                     const objXs = [
@@ -373,10 +494,8 @@
                         { val: objCenter.x, type: 'center' },
                         { val: objBounds.left + objBounds.width, type: 'right' }
                     ];
-                    const targetXs = [t.left, t.centerX, t.right];
-
-                    objXs.forEach(ox => {
-                        targetXs.forEach(tx => {
+                    [t.left, t.centerX, t.right].forEach(tx => {
+                        objXs.forEach(ox => {
                             if (Math.abs(ox.val - tx) < diffX) {
                                 diffX = Math.abs(ox.val - tx);
                                 snapX = tx;
@@ -386,16 +505,13 @@
                             }
                         });
                     });
-
                     const objYs = [
                         { val: objBounds.top, type: 'top' },
                         { val: objCenter.y, type: 'center' },
                         { val: objBounds.top + objBounds.height, type: 'bottom' }
                     ];
-                    const targetYs = [t.top, t.centerY, t.bottom];
-
-                    objYs.forEach(oy => {
-                        targetYs.forEach(ty => {
+                    [t.top, t.centerY, t.bottom].forEach(ty => {
+                        objYs.forEach(oy => {
                             if (Math.abs(oy.val - ty) < diffY) {
                                 diffY = Math.abs(oy.val - ty);
                                 snapY = ty;
@@ -409,67 +525,38 @@
 
                 if (snapX !== null) linesToDraw.push([snapX, -10000, snapX, 10000]);
                 if (snapY !== null) linesToDraw.push([-10000, snapY, 10000, snapY]);
-
-                if (snapX !== null || snapY !== null) {
-                    pendingSnapMove = { left: finalLeft, top: finalTop };
-                } else {
-                    pendingSnapMove = null;
-                }
+                pendingSnapMove = (snapX !== null || snapY !== null) ? { left: finalLeft, top: finalTop } : null;
             }
 
             if (isScaling) {
                 let activeCorner = e.transform.corner;
-                let scaleSnapX = null;
-                let scaleSnapY = null;
-                let sDiffX = SNAP_DISTANCE + 1;
-                let sDiffY = SNAP_DISTANCE + 1;
+                let scaleSnapX = null, scaleSnapY = null;
+                let sDiffX = SNAP_DISTANCE + 1, sDiffY = SNAP_DISTANCE + 1;
 
                 targets.forEach(t => {
                     const targetXs = [t.left, t.centerX, t.right];
                     const targetYs = [t.top, t.centerY, t.bottom];
-
-                    if(activeCorner.includes('l')) {
-                        targetXs.forEach(tx => { if(Math.abs(objBounds.left - tx) < sDiffX) { sDiffX = Math.abs(objBounds.left - tx); scaleSnapX = tx; } });
-                    } else if(activeCorner.includes('r')) {
-                        targetXs.forEach(tx => { if(Math.abs((objBounds.left + objBounds.width) - tx) < sDiffX) { sDiffX = Math.abs((objBounds.left + objBounds.width) - tx); scaleSnapX = tx; } });
-                    }
-
-                    if(activeCorner.includes('t')) {
-                        targetYs.forEach(ty => { if(Math.abs(objBounds.top - ty) < sDiffY) { sDiffY = Math.abs(objBounds.top - ty); scaleSnapY = ty; } });
-                    } else if(activeCorner.includes('b')) {
-                        targetYs.forEach(ty => { if(Math.abs((objBounds.top + objBounds.height) - ty) < sDiffY) { sDiffY = Math.abs((objBounds.top + objBounds.height) - ty); scaleSnapY = ty; } });
-                    }
+                    if (activeCorner.includes('l')) targetXs.forEach(tx => { if (Math.abs(objBounds.left - tx) < sDiffX) { sDiffX = Math.abs(objBounds.left - tx); scaleSnapX = tx; } });
+                    else if (activeCorner.includes('r')) targetXs.forEach(tx => { if (Math.abs((objBounds.left + objBounds.width) - tx) < sDiffX) { sDiffX = Math.abs((objBounds.left + objBounds.width) - tx); scaleSnapX = tx; } });
+                    if (activeCorner.includes('t')) targetYs.forEach(ty => { if (Math.abs(objBounds.top - ty) < sDiffY) { sDiffY = Math.abs(objBounds.top - ty); scaleSnapY = ty; } });
+                    else if (activeCorner.includes('b')) targetYs.forEach(ty => { if (Math.abs((objBounds.top + objBounds.height) - ty) < sDiffY) { sDiffY = Math.abs((objBounds.top + objBounds.height) - ty); scaleSnapY = ty; } });
                 });
 
                 if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, -10000, scaleSnapX, 10000]);
                 if (scaleSnapY !== null) linesToDraw.push([-10000, scaleSnapY, 10000, scaleSnapY]);
 
-                let finalScaleX = obj.scaleX;
-                let finalScaleY = obj.scaleY;
-                let willSnapScale = false;
-
-                if (!e.e.shiftKey) {
+                let finalScaleX = obj.scaleX, finalScaleY = obj.scaleY, willSnapScale = false;
+                if (!(e.e && e.e.shiftKey)) {
                     if (scaleSnapX !== null && activeCorner.includes('r')) {
                         let desiredWidth = scaleSnapX - objBounds.left;
-                        if(desiredWidth > 0) {
-                            finalScaleX = desiredWidth / obj.width;
-                            willSnapScale = true;
-                        }
+                        if (desiredWidth > 0) { finalScaleX = desiredWidth / obj.width; willSnapScale = true; }
                     }
                     if (scaleSnapY !== null && activeCorner.includes('b')) {
                         let desiredHeight = scaleSnapY - objBounds.top;
-                        if(desiredHeight > 0) {
-                            finalScaleY = desiredHeight / obj.height;
-                            willSnapScale = true;
-                        }
+                        if (desiredHeight > 0) { finalScaleY = desiredHeight / obj.height; willSnapScale = true; }
                     }
                 }
-
-                if (willSnapScale) {
-                    pendingSnapScale = { scaleX: finalScaleX, scaleY: finalScaleY };
-                } else {
-                    pendingSnapScale = null;
-                }
+                pendingSnapScale = willSnapScale ? { scaleX: finalScaleX, scaleY: finalScaleY } : null;
             }
 
             currentSnapLines = linesToDraw;
@@ -479,32 +566,27 @@
         canvas.on('object:scaling', handleSnapping);
 
         canvas.on('mouse:up', function() {
+            if (pageDrag.active || pageDrag.armed) return;
             const obj = canvas.getActiveObject();
             let didSnap = false;
-
             if (obj && pendingSnapMove) {
                 obj.set({ left: pendingSnapMove.left, top: pendingSnapMove.top });
                 obj.setCoords();
                 didSnap = true;
             }
-
             if (obj && pendingSnapScale) {
                 obj.set({ scaleX: pendingSnapScale.scaleX, scaleY: pendingSnapScale.scaleY });
                 obj.setCoords();
                 didSnap = true;
             }
-
             clearGuidelines();
-
             if (didSnap) canvas.renderAll();
         });
 
         canvas.on('after:render', function() {
             if (currentSnapLines.length === 0 && !pendingSnapMove && !pendingSnapScale) return;
-
             const ctx = canvas.contextContainer;
             ctx.save();
-
             const vpt = canvas.viewportTransform;
             ctx.transform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
 
@@ -513,83 +595,93 @@
                 ctx.strokeStyle = '#ec4899';
                 ctx.lineWidth = 1.5 / canvas.getZoom();
                 ctx.setLineDash([5 / canvas.getZoom(), 5 / canvas.getZoom()]);
-
-                currentSnapLines.forEach(coords => {
-                    ctx.moveTo(coords[0], coords[1]);
-                    ctx.lineTo(coords[2], coords[3]);
-                });
+                currentSnapLines.forEach(coords => { ctx.moveTo(coords[0], coords[1]); ctx.lineTo(coords[2], coords[3]); });
                 ctx.stroke();
             }
 
-            if (pendingSnapMove) {
+            function drawGhost(left, top, scaleX, scaleY, fill, stroke) {
                 const obj = canvas.getActiveObject();
-                if (obj) {
-                    ctx.save();
-                    ctx.translate(pendingSnapMove.left, pendingSnapMove.top);
-                    ctx.rotate(obj.angle * Math.PI / 180);
-
-                    const w = obj.width * obj.scaleX;
-                    const h = obj.height * obj.scaleY;
-                    const offsetX = obj.originX === 'center' ? -w/2 : 0;
-                    const offsetY = obj.originY === 'center' ? -h/2 : 0;
-
-                    ctx.fillStyle = 'rgba(236, 72, 153, 0.15)';
-                    ctx.strokeStyle = '#ec4899';
-                    ctx.lineWidth = 2 / canvas.getZoom();
-                    ctx.setLineDash([6 / canvas.getZoom(), 4 / canvas.getZoom()]);
-
-                    ctx.fillRect(offsetX, offsetY, w, h);
-                    ctx.strokeRect(offsetX, offsetY, w, h);
-                    ctx.restore();
-                }
+                if (!obj) return;
+                ctx.save();
+                ctx.translate(left, top);
+                ctx.rotate(obj.angle * Math.PI / 180);
+                const w = obj.width * scaleX;
+                const h = obj.height * scaleY;
+                const offsetX = obj.originX === 'center' ? -w / 2 : 0;
+                const offsetY = obj.originY === 'center' ? -h / 2 : 0;
+                ctx.fillStyle = fill;
+                ctx.strokeStyle = stroke;
+                ctx.lineWidth = 2 / canvas.getZoom();
+                ctx.setLineDash([6 / canvas.getZoom(), 4 / canvas.getZoom()]);
+                ctx.fillRect(offsetX, offsetY, w, h);
+                ctx.strokeRect(offsetX, offsetY, w, h);
+                ctx.restore();
             }
 
+            if (pendingSnapMove) drawGhost(pendingSnapMove.left, pendingSnapMove.top, canvas.getActiveObject().scaleX, canvas.getActiveObject().scaleY, 'rgba(236,72,153,0.15)', '#ec4899');
             if (pendingSnapScale) {
                 const obj = canvas.getActiveObject();
-                if (obj) {
-                    ctx.save();
-                    ctx.translate(obj.left, obj.top);
-                    ctx.rotate(obj.angle * Math.PI / 180);
-
-                    const w = obj.width * pendingSnapScale.scaleX;
-                    const h = obj.height * pendingSnapScale.scaleY;
-                    const offsetX = obj.originX === 'center' ? -w/2 : 0;
-                    const offsetY = obj.originY === 'center' ? -h/2 : 0;
-
-                    ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
-                    ctx.strokeStyle = '#3b82f6';
-                    ctx.lineWidth = 2 / canvas.getZoom();
-                    ctx.setLineDash([6 / canvas.getZoom(), 4 / canvas.getZoom()]);
-
-                    ctx.fillRect(offsetX, offsetY, w, h);
-                    ctx.strokeRect(offsetX, offsetY, w, h);
-                    ctx.restore();
-                }
+                drawGhost(obj.left, obj.top, pendingSnapScale.scaleX, pendingSnapScale.scaleY, 'rgba(59,130,246,0.15)', '#3b82f6');
             }
-
             ctx.restore();
         });
 
-        // --- ZOOM ---
-        function initZoom() {
-            currentZoom = 0.7;
-            applyZoom();
-        }
-
+        // --- ZOOM & CENTER ---
         function applyZoom() {
             const wrapper = document.getElementById('canvas-wrapper');
             wrapper.style.transform = `scale(${currentZoom})`;
             document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
             wrapper.style.width = (SQUARE_SIZE * squareCount) + 'px';
             wrapper.style.height = SQUARE_SIZE + 'px';
+            centerStagePadding();
+        }
+
+        function centerStagePadding() {
+            const workspace = document.getElementById('workspace');
+            const stage = document.getElementById('canvas-stage');
+            const pageW = SQUARE_SIZE * currentZoom;
+            const pageH = SQUARE_SIZE * currentZoom;
+            const totalW = pageW * squareCount;
+            const padX = Math.max(16, (workspace.clientWidth - pageW) / 2);
+            const padY = Math.max(16, (workspace.clientHeight - pageH) / 2);
+            // Larghezza stage = padding*2 + contenuto scalato (il wrapper ha width logica, scale riduce visual)
+            stage.style.paddingLeft = padX + 'px';
+            stage.style.paddingRight = padX + 'px';
+            stage.style.paddingTop = padY + 'px';
+            stage.style.paddingBottom = padY + 'px';
+            // Il canvas-wrapper occupa space pre-scale; per lo scroll corretto usiamo un spacer visuale
+            stage.style.width = (totalW + padX * 2) + 'px';
+            stage.style.minHeight = (pageH + padY * 2) + 'px';
+            // Compensa il fatto che scale non riduce il layout flow: riduci con negative margin trick
+            const wrapper = document.getElementById('canvas-wrapper');
+            const layoutW = SQUARE_SIZE * squareCount;
+            const layoutH = SQUARE_SIZE;
+            wrapper.style.marginRight = (totalW - layoutW) + 'px';
+            wrapper.style.marginBottom = (pageH - layoutH) + 'px';
+        }
+
+        function fitToScreen() {
+            const workspace = document.getElementById('workspace');
+            const availW = Math.max(120, workspace.clientWidth - 32);
+            const availH = Math.max(120, workspace.clientHeight - 32);
+            currentZoom = Math.min(availW / SQUARE_SIZE, availH / SQUARE_SIZE, 1);
+            currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom));
+            applyZoom();
+            scrollToPage(currentVisiblePage, false);
         }
 
         function zoomIn() {
-            if(currentZoom < MAX_ZOOM) { currentZoom += 0.1; applyZoom(); }
+            if (currentZoom < MAX_ZOOM) {
+                currentZoom = Math.min(MAX_ZOOM, currentZoom + 0.1);
+                applyZoom();
+            }
         }
 
         function zoomOut() {
-            if(currentZoom > MIN_ZOOM) { currentZoom -= 0.1; applyZoom(); }
+            if (currentZoom > MIN_ZOOM) {
+                currentZoom = Math.max(MIN_ZOOM, currentZoom - 0.1);
+                applyZoom();
+            }
         }
 
         document.getElementById('workspace').addEventListener('wheel', function(e) {
@@ -600,18 +692,19 @@
             }
         }, { passive: false });
 
+        window.addEventListener('resize', () => {
+            centerStagePadding();
+        });
+
         // --- TOOLBAR FLUTTUANTE ---
         function updateToolbarPosition() {
             const activeObj = canvas.getActiveObject();
             const toolbar = document.getElementById('floating-toolbar');
-
-            if (!activeObj || activeObj.isAlignmentLine) {
+            if (!activeObj || activeObj.isAlignmentLine || pageDrag.active) {
                 toolbar.style.display = 'none';
                 return;
             }
-
             toolbar.style.display = 'flex';
-
             const boundingRect = activeObj.getBoundingRect();
             toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
             toolbar.style.top = boundingRect.top + 'px';
@@ -626,19 +719,17 @@
 
         function bringGuidesToFront() {
             canvas.getObjects().forEach(obj => {
-                if(obj.isGuideLine) canvas.bringToFront(obj);
+                if (obj.isGuideLine) canvas.bringToFront(obj);
             });
         }
 
         function changeLayer(action) {
             const obj = canvas.getActiveObject();
-            if(!obj || isCropping) return;
-
-            if(action === 'bottom') canvas.sendToBack(obj);
-            if(action === 'down') canvas.sendBackwards(obj);
-            if(action === 'up') canvas.bringForward(obj);
-            if(action === 'top') canvas.bringToFront(obj);
-
+            if (!obj || isCropping) return;
+            if (action === 'bottom') canvas.sendToBack(obj);
+            if (action === 'down') canvas.sendBackwards(obj);
+            if (action === 'up') canvas.bringForward(obj);
+            if (action === 'top') canvas.bringToFront(obj);
             bringGuidesToFront();
             canvas.renderAll();
             saveState();
@@ -648,17 +739,14 @@
         function startCrop() {
             imgToCrop = canvas.getActiveObject();
             if (!imgToCrop || imgToCrop.type !== 'image') {
-                alert("Puoi ritagliare solo le immagini.");
+                alert('Puoi ritagliare solo le immagini.');
                 return;
             }
-
             if (imgToCrop.angle !== 0) {
                 imgToCrop.set('angle', 0);
                 canvas.renderAll();
             }
-
             isCropping = true;
-
             cropRect = new fabric.Rect({
                 left: imgToCrop.left,
                 top: imgToCrop.top,
@@ -676,17 +764,11 @@
                 lockRotation: true,
                 isCropRect: true
             });
-
-            cropRect.setControlsVisibility({
-                tlRotate: false, trRotate: false, blRotate: false, brRotate: false
-            });
-
+            cropRect.setControlsVisibility({ tlRotate: false, trRotate: false, blRotate: false, brRotate: false });
             canvas.add(cropRect);
             canvas.setActiveObject(cropRect);
-
             imgToCrop.selectable = false;
             imgToCrop.evented = false;
-
             document.getElementById('normal-tools').classList.add('hidden');
             document.getElementById('crop-tools').classList.remove('hidden');
             updateToolbarPosition();
@@ -694,39 +776,27 @@
 
         function applyCrop() {
             if (!isCropping || !cropRect || !imgToCrop) return;
-
             let scaleX = imgToCrop.scaleX;
             let scaleY = imgToCrop.scaleY;
-
             let currentCropX = imgToCrop.cropX || 0;
             let currentCropY = imgToCrop.cropY || 0;
-
             let leftOffset = cropRect.left - imgToCrop.left;
             let topOffset = cropRect.top - imgToCrop.top;
-
-            let newCropX = currentCropX + (leftOffset / scaleX);
-            let newCropY = currentCropY + (topOffset / scaleY);
-            let newWidth = cropRect.getScaledWidth() / scaleX;
-            let newHeight = cropRect.getScaledHeight() / scaleY;
-
             imgToCrop.set({
-                cropX: newCropX,
-                cropY: newCropY,
-                width: newWidth,
-                height: newHeight,
+                cropX: currentCropX + (leftOffset / scaleX),
+                cropY: currentCropY + (topOffset / scaleY),
+                width: cropRect.getScaledWidth() / scaleX,
+                height: cropRect.getScaledHeight() / scaleY,
                 left: cropRect.left,
                 top: cropRect.top,
                 selectable: true,
                 evented: true
             });
-
             canvas.remove(cropRect);
             isCropping = false;
             cropRect = null;
-
             document.getElementById('normal-tools').classList.remove('hidden');
             document.getElementById('crop-tools').classList.add('hidden');
-
             canvas.setActiveObject(imgToCrop);
             canvas.renderAll();
             saveState();
@@ -734,26 +804,18 @@
 
         function cancelCrop() {
             if (!isCropping) return;
-
             canvas.remove(cropRect);
             imgToCrop.selectable = true;
             imgToCrop.evented = true;
-
             isCropping = false;
             cropRect = null;
-
             document.getElementById('normal-tools').classList.remove('hidden');
             document.getElementById('crop-tools').classList.add('hidden');
-
             canvas.setActiveObject(imgToCrop);
             canvas.renderAll();
         }
 
         // --- PAGINE ---
-        /**
-         * Pagina di un oggetto = quella che contiene l'angolo in alto a sinistra
-         * dell'immagine (proprietà left/top di Fabric con origin top-left).
-         */
         function getObjectPageIndex(obj) {
             const left = typeof obj.left === 'number' ? obj.left : 0;
             let page = Math.floor(left / SQUARE_SIZE);
@@ -767,11 +829,10 @@
             isHistoryAction = true;
             [...guideLines].forEach(line => canvas.remove(line));
             guideLines = [];
-
             for (let i = 1; i < squareCount; i++) {
                 const lineX = SQUARE_SIZE * i;
                 const line = new fabric.Line([lineX, 0, lineX, SQUARE_SIZE], {
-                    stroke: 'rgba(0,0,0,0.4)',
+                    stroke: 'rgba(0,0,0,0.35)',
                     strokeWidth: 2,
                     strokeDashArray: [15, 15],
                     selectable: false,
@@ -791,13 +852,9 @@
             document.getElementById('canvas-wrapper').style.width = (SQUARE_SIZE * squareCount) + 'px';
             rebuildGuideLines();
             applyZoom();
-            renderPagesBar();
+            renderPagesUI();
         }
 
-        /**
-         * Sposta la pagina fromIndex in toIndex.
-         * Le immagini "a metà" restano con la pagina del loro angolo TL.
-         */
         function movePage(fromIndex, toIndex) {
             if (isCropping) return;
             if (fromIndex === toIndex) return;
@@ -807,49 +864,33 @@
                 !o.isGuideLine && !o.isAlignmentLine && !o.isCropRect
             );
 
-            // Snapshot: pagina di appartenenza + offset dentro la pagina
             const snapshots = content.map(obj => {
                 const page = getObjectPageIndex(obj);
-                return {
-                    obj,
-                    page,
-                    offsetX: obj.left - page * SQUARE_SIZE,
-                    top: obj.top
-                };
+                return { obj, page, offsetX: obj.left - page * SQUARE_SIZE, top: obj.top };
             });
 
-            // Nuovo ordine delle pagine (indici vecchi)
             const order = Array.from({ length: squareCount }, (_, i) => i);
             const [moved] = order.splice(fromIndex, 1);
             order.splice(toIndex, 0, moved);
 
-            // Mapping: vecchio indice pagina -> nuovo indice
             const newIndexOf = {};
             order.forEach((oldIdx, newIdx) => { newIndexOf[oldIdx] = newIdx; });
 
             snapshots.forEach(({ obj, page, offsetX, top }) => {
-                const newPage = newIndexOf[page];
-                obj.set({ left: newPage * SQUARE_SIZE + offsetX, top });
+                obj.set({ left: newIndexOf[page] * SQUARE_SIZE + offsetX, top });
                 obj.setCoords();
             });
 
             canvas.discardActiveObject();
             canvas.renderAll();
             updateToolbarPosition();
-            renderPagesBar();
-            saveState(); // un solo snapshot dopo lo spostamento
-        }
-
-        function movePageLeft(index) {
-            if (index > 0) movePage(index, index - 1);
-        }
-
-        function movePageRight(index) {
-            if (index < squareCount - 1) movePage(index, index + 1);
+            renderPagesUI();
+            saveState();
+            scrollToPage(toIndex, true);
         }
 
         function deletePage(index) {
-            if (isCropping) return;
+            if (isCropping || pageDrag.active) return;
             if (squareCount <= 1) {
                 alert('Serve almeno una pagina.');
                 return;
@@ -863,9 +904,8 @@
             isHistoryAction = true;
             content.forEach(obj => {
                 const page = getObjectPageIndex(obj);
-                if (page === index) {
-                    canvas.remove(obj);
-                } else if (page > index) {
+                if (page === index) canvas.remove(obj);
+                else if (page > index) {
                     obj.set({ left: obj.left - SQUARE_SIZE });
                     obj.setCoords();
                 }
@@ -875,87 +915,288 @@
             canvas.renderAll();
             isHistoryAction = false;
             saveState();
+            currentVisiblePage = Math.min(currentVisiblePage, squareCount - 1);
+            scrollToPage(currentVisiblePage, true);
         }
 
-        function renderPagesBar() {
-            const list = document.getElementById('pages-list');
-            list.innerHTML = '';
+        function deleteCurrentPage() {
+            deletePage(currentVisiblePage);
+        }
 
+        function renderPagesUI() {
+            const dots = document.getElementById('pages-dots');
+            dots.innerHTML = '';
             for (let i = 0; i < squareCount; i++) {
-                const chip = document.createElement('div');
-                chip.className = 'page-chip flex items-center gap-1 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-full pl-3 pr-1 py-1 text-sm font-semibold shadow-sm hover:bg-indigo-100 transition';
-                chip.draggable = true;
-                chip.dataset.pageIndex = String(i);
-                chip.title = 'Trascina per spostare la pagina';
+                const dot = document.createElement('button');
+                dot.type = 'button';
+                dot.className = 'page-dot' + (i === currentVisiblePage ? ' active' : '');
+                dot.setAttribute('aria-label', 'Vai a pagina ' + (i + 1));
+                dot.addEventListener('click', () => scrollToPage(i, true));
+                dots.appendChild(dot);
+            }
+            document.getElementById('page-label').textContent = `Pagina ${currentVisiblePage + 1} / ${squareCount}`;
+            document.getElementById('btn-delete-page').disabled = squareCount <= 1;
+        }
 
-                chip.innerHTML = `
-                    <span class="text-indigo-400 mr-1" aria-hidden="true">⋮⋮</span>
-                    <span>${i + 1}</span>
-                    <button type="button" data-action="left" class="w-7 h-7 rounded-full hover:bg-white/80 text-xs disabled:opacity-30" title="Sposta a sinistra" ${i === 0 ? 'disabled' : ''}>◀</button>
-                    <button type="button" data-action="right" class="w-7 h-7 rounded-full hover:bg-white/80 text-xs disabled:opacity-30" title="Sposta a destra" ${i === squareCount - 1 ? 'disabled' : ''}>▶</button>
-                    <button type="button" data-action="delete" class="w-7 h-7 rounded-full hover:bg-red-50 text-red-500 text-xs ${squareCount <= 1 ? 'opacity-30 pointer-events-none' : ''}" title="Elimina pagina">✕</button>
-                `;
+        function scrollToPage(index, smooth) {
+            index = Math.max(0, Math.min(squareCount - 1, index));
+            currentVisiblePage = index;
+            const workspace = document.getElementById('workspace');
+            const stage = document.getElementById('canvas-stage');
+            const padX = parseFloat(stage.style.paddingLeft) || 0;
+            const target = padX + index * SQUARE_SIZE * currentZoom - (workspace.clientWidth - SQUARE_SIZE * currentZoom) / 2;
+            workspace.scrollTo({
+                left: Math.max(0, target),
+                behavior: smooth ? 'smooth' : 'auto'
+            });
+            renderPagesUI();
+        }
 
-                chip.querySelector('[data-action="left"]').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    movePageLeft(i);
-                });
-                chip.querySelector('[data-action="right"]').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    movePageRight(i);
-                });
-                chip.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    deletePage(i);
-                });
-
-                chip.addEventListener('dragstart', (e) => {
-                    dragPageFrom = i;
-                    chip.classList.add('dragging');
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.dataTransfer.setData('text/plain', String(i));
-                });
-                chip.addEventListener('dragend', () => {
-                    dragPageFrom = null;
-                    list.querySelectorAll('.page-chip').forEach(c => {
-                        c.classList.remove('dragging', 'drag-over', 'drag-over-right');
-                    });
-                });
-                chip.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
-                    const rect = chip.getBoundingClientRect();
-                    const mid = rect.left + rect.width / 2;
-                    list.querySelectorAll('.page-chip').forEach(c => c.classList.remove('drag-over', 'drag-over-right'));
-                    if (e.clientX < mid) chip.classList.add('drag-over');
-                    else chip.classList.add('drag-over-right');
-                });
-                chip.addEventListener('dragleave', () => {
-                    chip.classList.remove('drag-over', 'drag-over-right');
-                });
-                chip.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    const from = dragPageFrom !== null ? dragPageFrom : parseInt(e.dataTransfer.getData('text/plain'), 10);
-                    if (Number.isNaN(from)) return;
-                    const rect = chip.getBoundingClientRect();
-                    const placeAfter = e.clientX >= rect.left + rect.width / 2;
-                    let to = placeAfter ? i + 1 : i;
-                    if (from < to) to--; // dopo la rimozione di `from` gli indici a destra scendono
-                    to = Math.max(0, Math.min(squareCount - 1, to));
-                    if (from !== to) movePage(from, to);
-                });
-
-                // Scroll alla pagina al click sul numero
-                chip.addEventListener('click', (e) => {
-                    if (e.target.closest('button')) return;
-                    const workspace = document.getElementById('workspace');
-                    const targetLeft = i * SQUARE_SIZE * currentZoom;
-                    workspace.scrollTo({ left: Math.max(0, targetLeft - 40), behavior: 'smooth' });
-                });
-
-                list.appendChild(chip);
+        function updateVisiblePageFromScroll() {
+            const workspace = document.getElementById('workspace');
+            const stage = document.getElementById('canvas-stage');
+            const padX = parseFloat(stage.style.paddingLeft) || 0;
+            const centerX = workspace.scrollLeft + workspace.clientWidth / 2 - padX;
+            const page = Math.round(centerX / (SQUARE_SIZE * currentZoom) - 0.5);
+            const clamped = Math.max(0, Math.min(squareCount - 1, page));
+            if (clamped !== currentVisiblePage) {
+                currentVisiblePage = clamped;
+                renderPagesUI();
             }
         }
+
+        document.getElementById('workspace').addEventListener('scroll', () => {
+            if (!pageDrag.active) updateVisiblePageFromScroll();
+        }, { passive: true });
+
+        // --- LONG PRESS PAGE DRAG ---
+        function clientPoint(e) {
+            if (e.touches && e.touches[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            if (e.changedTouches && e.changedTouches[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+            return { x: e.clientX, y: e.clientY };
+        }
+
+        function isBackgroundTarget(target) {
+            return !target || target.isGuideLine;
+        }
+
+        function cancelLongPressArm() {
+            if (pageDrag.timer) {
+                clearTimeout(pageDrag.timer);
+                pageDrag.timer = null;
+            }
+            pageDrag.armed = false;
+            document.getElementById('longpress-ring').classList.remove('show');
+        }
+
+        function showLongPressRing(x, y) {
+            const ring = document.getElementById('longpress-ring');
+            ring.style.left = x + 'px';
+            ring.style.top = y + 'px';
+            ring.classList.add('show');
+        }
+
+        function startPageDrag(fromIndex, clientX, clientY) {
+            if (squareCount < 2 || isCropping) {
+                cancelLongPressArm();
+                return;
+            }
+            pageDrag.armed = false;
+            pageDrag.timer = null;
+            pageDrag.active = true;
+            pageDrag.fromIndex = fromIndex;
+            pageDrag.insertAt = fromIndex;
+
+            document.getElementById('longpress-ring').classList.remove('show');
+            document.body.classList.add('page-dragging');
+            canvas.discardActiveObject();
+            canvas.selection = false;
+            canvas.forEachObject(o => {
+                if (!o.isGuideLine) {
+                    o.selectable = false;
+                    o.evented = false;
+                }
+            });
+            canvas.renderAll();
+            updateToolbarPosition();
+
+            // Snapshot pagina come ghost
+            guideLines.forEach(l => l.set('opacity', 0));
+            canvas.renderAll();
+            const dataURL = canvas.toDataURL({
+                format: 'jpeg',
+                quality: 0.7,
+                left: fromIndex * SQUARE_SIZE,
+                top: 0,
+                width: SQUARE_SIZE,
+                height: SQUARE_SIZE
+            });
+            guideLines.forEach(l => l.set('opacity', 1));
+            canvas.renderAll();
+
+            const ghost = document.getElementById('page-ghost');
+            const size = Math.min(200, Math.max(120, SQUARE_SIZE * currentZoom * 0.45));
+            pageDrag.ghostSize = size;
+            ghost.style.width = size + 'px';
+            ghost.style.height = size + 'px';
+            ghost.querySelector('img').src = dataURL;
+            ghost.classList.add('show');
+            ghost.style.left = clientX + 'px';
+            ghost.style.top = clientY + 'px';
+
+            // Dim della pagina sorgente
+            const dim = document.getElementById('page-drag-dim');
+            dim.style.left = (fromIndex * SQUARE_SIZE) + 'px';
+            dim.style.width = SQUARE_SIZE + 'px';
+            dim.classList.add('show');
+
+            if (navigator.vibrate) navigator.vibrate(25);
+
+            updatePageDragVisuals(clientX);
+        }
+
+        function insertionIndexFromClientX(clientX) {
+            const wrapper = document.getElementById('canvas-wrapper');
+            const rect = wrapper.getBoundingClientRect();
+            // x in coordinate canvas non scalate
+            const xCanvas = (clientX - rect.left) / currentZoom;
+            // slot: 0 prima della prima, ..., squareCount dopo l'ultima
+            let slot = Math.round(xCanvas / SQUARE_SIZE);
+            slot = Math.max(0, Math.min(squareCount, slot));
+            return slot;
+        }
+
+        function updatePageDragVisuals(clientX) {
+            const ghost = document.getElementById('page-ghost');
+            // left/top aggiornati dal move handler
+
+            let slot = insertionIndexFromClientX(clientX);
+            // Converti slot (0..N) in destinazione finale dopo rimozione di from
+            pageDrag.insertAt = slot;
+
+            const line = document.getElementById('page-insert-line');
+            line.style.left = (slot * SQUARE_SIZE) + 'px';
+            line.classList.add('show');
+        }
+
+        function finishPageDrag() {
+            if (!pageDrag.active) return;
+
+            const from = pageDrag.fromIndex;
+            let slot = pageDrag.insertAt; // 0..squareCount
+            let to = slot;
+            if (from < slot) to = slot - 1;
+            to = Math.max(0, Math.min(squareCount - 1, to));
+
+            endPageDragUI();
+            if (from !== to) movePage(from, to);
+        }
+
+        function endPageDragUI() {
+            pageDrag.active = false;
+            pageDrag.armed = false;
+            pageDrag.timer = null;
+            pageDrag.fromIndex = null;
+            document.body.classList.remove('page-dragging');
+            document.getElementById('page-ghost').classList.remove('show');
+            document.getElementById('page-insert-line').classList.remove('show');
+            document.getElementById('page-drag-dim').classList.remove('show');
+            document.getElementById('longpress-ring').classList.remove('show');
+
+            canvas.forEachObject(o => {
+                if (!o.isGuideLine && !o.isCropRect) {
+                    o.selectable = true;
+                    o.evented = true;
+                }
+            });
+            canvas.selection = true;
+        }
+
+        function cancelPageDrag() {
+            cancelLongPressArm();
+            if (pageDrag.active) {
+                endPageDragUI();
+                canvas.renderAll();
+            }
+        }
+
+        canvas.on('mouse:down', function(opt) {
+            if (isCropping || pageDrag.active) return;
+            if (!isBackgroundTarget(opt.target)) return;
+            if (squareCount < 2) return;
+
+            const pt = clientPoint(opt.e);
+            const pointer = canvas.getPointer(opt.e);
+            const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / SQUARE_SIZE)));
+
+            pageDrag.armed = true;
+            pageDrag.startClientX = pt.x;
+            pageDrag.startClientY = pt.y;
+            pageDrag.fromIndex = pageIndex;
+            showLongPressRing(pt.x, pt.y);
+
+            pageDrag.timer = setTimeout(() => {
+                startPageDrag(pageIndex, pt.x, pt.y);
+            }, LONG_PRESS_MS);
+        });
+
+        canvas.on('mouse:move', function(opt) {
+            const pt = clientPoint(opt.e);
+
+            if (pageDrag.armed && !pageDrag.active) {
+                const dx = pt.x - pageDrag.startClientX;
+                const dy = pt.y - pageDrag.startClientY;
+                if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOL) {
+                    cancelLongPressArm();
+                } else {
+                    showLongPressRing(pageDrag.startClientX, pageDrag.startClientY);
+                }
+                return;
+            }
+
+            if (pageDrag.active) {
+                const ghost = document.getElementById('page-ghost');
+                ghost.style.left = pt.x + 'px';
+                ghost.style.top = pt.y + 'px';
+                updatePageDragVisuals(pt.x);
+
+                // Auto-scroll workspace mentre si trascina ai bordi
+                const workspace = document.getElementById('workspace');
+                const edge = 48;
+                if (pt.x < edge) workspace.scrollLeft -= 18;
+                else if (pt.x > window.innerWidth - edge) workspace.scrollLeft += 18;
+            }
+        });
+
+        function onPointerUp() {
+            if (pageDrag.armed && !pageDrag.active) {
+                cancelLongPressArm();
+                return;
+            }
+            if (pageDrag.active) finishPageDrag();
+        }
+
+        canvas.on('mouse:up', onPointerUp);
+        canvas.on('mouse:out', function() {
+            // non cancellare se stiamo trascinando fuori
+            if (pageDrag.armed && !pageDrag.active) cancelLongPressArm();
+        });
+
+        // Evita menu contestuale durante long-press
+        document.getElementById('canvas-wrapper').addEventListener('contextmenu', (e) => {
+            if (pageDrag.armed || pageDrag.active) e.preventDefault();
+        });
+
+        // Touch: previeni scroll durante armed long-press sul canvas
+        const upperCanvas = canvas.upperCanvasEl;
+        upperCanvas.addEventListener('touchstart', () => {}, { passive: true });
+        upperCanvas.addEventListener('touchmove', (e) => {
+            if (pageDrag.armed || pageDrag.active) {
+                e.preventDefault();
+            }
+        }, { passive: false });
+        upperCanvas.addEventListener('touchend', onPointerUp);
+        upperCanvas.addEventListener('touchcancel', cancelPageDrag);
 
         // --- BG / UPLOAD / DELETE ---
         document.getElementById('bg-color').addEventListener('input', function(e) {
@@ -964,33 +1205,30 @@
             canvas.backgroundColor = color;
             canvas.renderAll();
         });
-
-        document.getElementById('bg-color').addEventListener('change', function() {
-            saveState();
-        });
+        document.getElementById('bg-color').addEventListener('change', saveState);
 
         function addSquare() {
             squareCount++;
             syncCanvasSize();
             canvas.renderAll();
             saveState();
+            scrollToPage(squareCount - 1, true);
         }
 
         document.getElementById('image-upload').addEventListener('change', function(e) {
             const files = e.target.files;
             if (!files.length) return;
+            const baseLeft = currentVisiblePage * SQUARE_SIZE;
 
-            for(let i = 0; i < files.length; i++) {
+            for (let i = 0; i < files.length; i++) {
                 const reader = new FileReader();
                 reader.onload = function(event) {
                     fabric.Image.fromURL(event.target.result, function(img) {
-                        if(img.width > SQUARE_SIZE) img.scaleToWidth(SQUARE_SIZE * 0.8);
-
+                        if (img.width > SQUARE_SIZE) img.scaleToWidth(SQUARE_SIZE * 0.8);
                         img.set({
-                            left: (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
-                            top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2),
+                            left: baseLeft + (SQUARE_SIZE / 2) - (img.getScaledWidth() / 2),
+                            top: (SQUARE_SIZE / 2) - (img.getScaledHeight() / 2)
                         });
-
                         canvas.add(img);
                         canvas.setActiveObject(img);
                     });
@@ -1001,59 +1239,33 @@
         });
 
         function deleteSelected() {
-            if (isCropping) return;
+            if (isCropping || pageDrag.active) return;
             const activeObjects = canvas.getActiveObjects();
             if (activeObjects.length) {
                 canvas.discardActiveObject();
-                activeObjects.forEach(function(object) {
-                    canvas.remove(object);
-                });
+                activeObjects.forEach(object => canvas.remove(object));
             }
         }
 
         window.addEventListener('keydown', function(e) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-            if (e.key === 'Delete' || e.key === 'Backspace') {
-                deleteSelected();
-            }
-
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-                e.preventDefault();
-                undo();
-            }
-
-            if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) {
-                e.preventDefault();
-                redo();
-            }
-
-            if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
-                e.preventDefault();
-                changeLayer('up');
-            }
-
-            if ((e.ctrlKey || e.metaKey) && e.key === '-') {
-                e.preventDefault();
-                changeLayer('down');
-            }
+            if (e.key === 'Escape') cancelPageDrag();
+            if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+            if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); redo(); }
+            if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) { e.preventDefault(); changeLayer('up'); }
+            if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeLayer('down'); }
         });
 
         function exportCarousel() {
             guideLines.forEach(line => line.set('opacity', 0));
             canvas.discardActiveObject();
             canvas.renderAll();
-
             for (let i = 0; i < squareCount; i++) {
                 const dataURL = canvas.toDataURL({
-                    format: 'jpeg',
-                    quality: 1,
-                    left: i * SQUARE_SIZE,
-                    top: 0,
-                    width: SQUARE_SIZE,
-                    height: SQUARE_SIZE
+                    format: 'jpeg', quality: 1,
+                    left: i * SQUARE_SIZE, top: 0, width: SQUARE_SIZE, height: SQUARE_SIZE
                 });
-
                 const link = document.createElement('a');
                 link.download = `carousel-slide-${i + 1}.jpg`;
                 link.href = dataURL;
@@ -1061,23 +1273,20 @@
                 link.click();
                 document.body.removeChild(link);
             }
-
             guideLines.forEach(line => line.set('opacity', 1));
             canvas.renderAll();
         }
 
-        // --- PERSISTENZA (localStorage) ---
+        // --- PERSISTENZA ---
         function persistProject() {
             try {
-                const payload = {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({
                     squareCount,
                     backgroundColor: canvas.backgroundColor,
                     json: canvas.toJSON(['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect']),
                     savedAt: Date.now()
-                };
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+                }));
             } catch (err) {
-                // Quota o private mode: ignora
                 console.warn('Persistenza non disponibile', err);
             }
         }
@@ -1088,7 +1297,6 @@
                 if (!raw) return false;
                 const payload = JSON.parse(raw);
                 if (!payload || !payload.json) return false;
-
                 isHistoryAction = true;
                 canvas.loadFromJSON(payload.json, function() {
                     squareCount = payload.squareCount || 1;
@@ -1099,13 +1307,11 @@
                     }
                     syncCanvasSize();
                     guideLines = canvas.getObjects().filter(o => o.isGuideLine);
-                    // Se le guide non c'erano o sono inconsistenti, ricostruiscile
-                    if (guideLines.length !== Math.max(0, squareCount - 1)) {
-                        rebuildGuideLines();
-                    }
+                    if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
                     canvas.renderAll();
                     isHistoryAction = false;
                     initHistory();
+                    fitToScreen();
                 });
                 return true;
             } catch (err) {
@@ -1126,9 +1332,7 @@
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js').catch((err) => {
-                    console.warn('SW registration failed', err);
-                });
+                navigator.serviceWorker.register('./sw.js').catch(err => console.warn('SW registration failed', err));
             });
         }
 
@@ -1159,11 +1363,18 @@
         });
 
         // --- BOOT ---
-        initZoom();
+        renderPagesUI();
         if (!restoreProject()) {
             initHistory();
-            renderPagesBar();
+            fitToScreen();
+        } else {
+            // fitToScreen chiamato nel callback di restore
         }
+
+        // Se restore è sync-false path, assicurati fit dopo paint
+        requestAnimationFrame(() => {
+            if (!localStorage.getItem(STORAGE_KEY)) fitToScreen();
+        });
     </script>
 </body>
 </html>
