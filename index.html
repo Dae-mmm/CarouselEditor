@@ -284,6 +284,7 @@
         }
 
         #btn-grid.is-active,
+        #btn-snap.is-active,
         #btn-page-editor.is-active {
             background: #eef2ff;
             color: #4f46e5;
@@ -406,6 +407,9 @@
                     linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 0 33%/100% 1px no-repeat,
                     linear-gradient(rgba(107,114,128,.9),rgba(107,114,128,.9)) 0 66%/100% 1px no-repeat;
                     border:2px solid currentColor;border-radius:2px;" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="btn-snap" onclick="toggleSnap()" class="aspect-btn transition bg-gray-100 is-active" title="Snap magnetico attivo" aria-label="Attiva o disattiva snap" aria-pressed="true">
+                <span aria-hidden="true">🧲</span>
             </button>
         </div>
         <div id="pages-dots" class="flex items-center justify-center gap-2 min-h-[12px]"></div>
@@ -860,6 +864,7 @@
         let pendingSnapScale = null;
         const SNAP_DISTANCE = 12;
         const PAGE_SNAP_DISTANCE = 16;
+        let snapEnabled = true;
 
         function clearGuidelines() {
             if (currentSnapLines.length > 0 || pendingSnapMove || pendingSnapScale) {
@@ -868,6 +873,17 @@
                 pendingSnapScale = null;
                 canvas.renderAll();
             }
+        }
+
+        function toggleSnap() {
+            snapEnabled = !snapEnabled;
+            const btn = document.getElementById('btn-snap');
+            if (btn) {
+                btn.classList.toggle('is-active', snapEnabled);
+                btn.setAttribute('aria-pressed', snapEnabled ? 'true' : 'false');
+                btn.title = snapEnabled ? 'Snap magnetico attivo' : 'Snap magnetico disattivo';
+            }
+            if (!snapEnabled) clearGuidelines();
         }
 
         function getPageEdgeTargets(obj) {
@@ -890,7 +906,7 @@
             if (pageDrag.active || pageDrag.armed || viewPan.active || pageEditorMode) return;
             const obj = e.target;
             if (!obj || obj.isCropping || obj.isCropRect) return;
-            if (e.e && e.e.altKey) { clearGuidelines(); return; }
+            if (!snapEnabled || (e.e && e.e.altKey)) { clearGuidelines(); return; }
 
             const action = e.transform ? e.transform.action : '';
             const isMoving = action === 'drag';
