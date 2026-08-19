@@ -45,14 +45,19 @@ const ASPECT_ALIASES = {
     '4:3': '1.91:1'
 };
 const MAX_IMAGE_SHORT_SIDE = 1350;
+const PROXY_SHORT_SIDE = 720;
+const HIRES_SHORT_SIDE = 2160;
 const STORAGE_KEY = 'carousel-maker-project-v4';
 const PROJECT_TYPE = 'carousel-maker-project';
-const PROJECT_VERSION = 1;
-const FABRIC_JSON_PROPS = ['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect'];
-const LONG_PRESS_MS = 1000;
+const PROJECT_VERSION = 2;
+const FABRIC_JSON_PROPS = [
+    'isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect',
+    'hiResId', 'proxyNaturalWidth', 'proxyNaturalHeight'
+];
 const LONG_PRESS_MOVE_TOL = 12;
-const LONG_PRESS_RING_DELAY = 380;
 const FIT_SCALE = 0.86; // pagine un filo più piccole del fit pieno
+const HIRES_DB_NAME = 'carousel-maker-hires-v1';
+const HIRES_STORE = 'images';
 
 let aspectRatio = '1:1';
 let pageW = ASPECT_PRESETS['1:1'].w;
@@ -80,6 +85,8 @@ const MIN_ZOOM = 0.1;
 
 let deferredInstallPrompt = null;
 let currentVisiblePage = 0;
+let pageEditorMode = false;
+let isExporting = false;
 
 // --- Long-press page drag state ---
 const pageDrag = {
@@ -104,6 +111,12 @@ const viewPan = {
     startScrollTop: 0
 };
 
+const scrollLock = {
+    active: false,
+    left: 0,
+    top: 0
+};
+
 let showRuleGrid = false;
 
 // Pinch + rotate multitouch (mobile)
@@ -124,19 +137,98 @@ function isMobileUI() {
         || (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900);
 }
 
+function beginScrollLock() {
+    const ws = document.getElementById('workspace');
+    scrollLock.active = true;
+    scrollLock.left = ws.scrollLeft;
+    scrollLock.top = ws.scrollTop;
+    document.body.classList.add('object-dragging');
+}
+
+function endScrollLock() {
+    if (!scrollLock.active) return;
+    scrollLock.active = false;
+    document.body.classList.remove('object-dragging');
+}
+
 function updateMobileHint() {
     const hint = document.getElementById('hint-toast');
     if (!hint) return;
-    if (isMobileUI()) {
-        hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per spostare la vista · Tieni 1s per riordinare · Pinch sull’immagine';
+    if (pageEditorMode) {
+        hint.innerHTML = squareCount < 2
+            ? 'Aggiungi almeno due pagine, poi trascina per riordinarle'
+            : 'Trascina una <strong>pagina</strong> per spostarla · Fatto per tornare alle foto';
+    } else if (isMobileUI()) {
+        hint.innerHTML = 'Sposta le foto liberamente · <strong>Pagine</strong> per riordinare il carousel';
     } else {
-        hint.innerHTML = 'Trascina sullo <strong>sfondo</strong> per selezione multipla · Tieni 1s per spostare una pagina';
+        hint.innerHTML = 'Modifica le foto · <strong>Pagine</strong> per riordinare il carousel';
     }
 }
 
+function applyObjectLockState() {
+    const lock = pageEditorMode || pageDrag.active;
+    canvas.selection = !lock && !isMobileUI();
+    canvas.forEachObject(o => {
+        if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) {
+            o.selectable = false;
+            o.evented = false;
+            return;
+        }
+        o.selectable = !lock;
+        o.evented = !lock;
+    });
+    if (lock) {
+        canvas.discardActiveObject();
+        updateToolbarPosition();
+    }
+}
+
+function renderPageEditorFrames() {
+    const el = document.getElementById('page-editor-frames');
+    if (!el) return;
+    el.innerHTML = '';
+    el.style.width = (pageW * squareCount) + 'px';
+    el.style.height = pageH + 'px';
+    for (let i = 0; i < squareCount; i++) {
+        const frame = document.createElement('div');
+        frame.className = 'page-editor-frame';
+        frame.style.left = (i * pageW) + 'px';
+        frame.style.width = pageW + 'px';
+        frame.style.height = pageH + 'px';
+        frame.innerHTML = `<span class="badge">${i + 1}</span><span class="grip">⋮⋮</span>`;
+        el.appendChild(frame);
+    }
+}
+
+function setPageEditorMode(on) {
+    on = !!on;
+    if (on === pageEditorMode) {
+        applyObjectLockState();
+        renderPageEditorFrames();
+        updateMobileHint();
+        return;
+    }
+    if (on && isCropping) cancelCrop();
+    if (!on) cancelPageDrag();
+    pageEditorMode = on;
+    document.body.classList.toggle('page-editor-mode', pageEditorMode);
+    const btn = document.getElementById('btn-page-editor');
+    if (btn) {
+        btn.classList.toggle('is-active', pageEditorMode);
+        btn.setAttribute('aria-pressed', pageEditorMode ? 'true' : 'false');
+    }
+    applyObjectLockState();
+    renderPageEditorFrames();
+    updateMobileHint();
+    canvas.requestRenderAll();
+}
+
+function togglePageEditorMode() {
+    setPageEditorMode(!pageEditorMode);
+}
+
 function applyInteractionMode() {
-    // Marquee / selezione multipla solo su PC; su mobile il drag sullo sfondo fa pan
-    canvas.selection = !isMobileUI();
+    applyObjectLockState();
 }
 
 // --- ROTAZIONE ---
@@ -187,9 +279,13 @@ const canvas = new fabric.Canvas('canvas', {
     preserveObjectStacking: true,
     uniformScaling: false,
     uniScaleKey: 'shiftKey',
-    allowTouchScrolling: true,
-    selection: true
+    allowTouchScrolling: false,
+    selection: true,
+    enableRetinaScaling: false,
+    renderOnAddRemove: true,
+    skipOffscreen: true
 });
+canvas.imageSmoothingEnabled = true;
 
 /** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
 function configureObjectControls(obj) {
@@ -278,17 +374,16 @@ function loadHistoryState(state) {
     canvas.loadFromJSON(state.json, function() {
         squareCount = state.squareCount;
         document.getElementById('square-badge').innerText = squareCount;
-        canvas.setWidth(pageW * squareCount);
-        canvas.setHeight(pageH);
-        document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
-        document.getElementById('canvas-wrapper').style.height = pageH + 'px';
         guideLines = canvas.getObjects().filter(o => o.isGuideLine);
         canvas.renderAll();
         isHistoryAction = false;
         updateUndoRedoUI();
         configureAllObjectControls();
+        applyObjectLockState();
         updateToolbarPosition();
         renderPagesUI();
+        renderRuleGrid();
+        renderPageEditorFrames();
         applyZoom();
         persistProject();
     });
@@ -306,7 +401,8 @@ canvas.on('object:removed', (e) => {
 let currentSnapLines = [];
 let pendingSnapMove = null;
 let pendingSnapScale = null;
-const SNAP_DISTANCE = 10;
+const SNAP_DISTANCE = 12;
+const PAGE_SNAP_DISTANCE = 16;
 let snapEnabled = true;
 
 function clearGuidelines() {
@@ -329,34 +425,26 @@ function toggleSnap() {
     if (!snapEnabled) clearGuidelines();
 }
 
-/** Linee di snap: bordi/centri oggetti + (se griglia accesa) terzi della regola 3×3 */
-function collectSnapAxes(excludeObj) {
-    const xLines = [];
-    const yLines = [];
-
-    canvas.getObjects().forEach(t => {
-        if (t === excludeObj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
-        const bounds = t.getBoundingRect();
-        const center = t.getCenterPoint();
-        xLines.push(bounds.left, center.x, bounds.left + bounds.width);
-        yLines.push(bounds.top, center.y, bounds.top + bounds.height);
-    });
-
-    if (showRuleGrid) {
-        for (let i = 0; i < squareCount; i++) {
-            const ox = i * pageW;
-            xLines.push(ox + pageW / 3, ox + (2 * pageW) / 3);
-        }
-        yLines.push(pageH / 3, (2 * pageH) / 3);
-    }
-
-    return { xLines, yLines };
+function getPageEdgeTargets(obj) {
+    const page = getObjectPageIndex(obj);
+    const pages = [page];
+    if (page > 0) pages.push(page - 1);
+    if (page < squareCount - 1) pages.push(page + 1);
+    return pages.map(p => ({
+        left: p * pageW,
+        centerX: p * pageW + pageW / 2,
+        right: (p + 1) * pageW,
+        top: 0,
+        centerY: pageH / 2,
+        bottom: pageH,
+        isPage: true
+    }));
 }
 
 function handleSnapping(e) {
-    if (pageDrag.active || pageDrag.armed || viewPan.active) return;
+    if (pageDrag.active || pageDrag.armed || viewPan.active || pageEditorMode) return;
     const obj = e.target;
-    if (!obj || obj.isCropping) return;
+    if (!obj || obj.isCropping || obj.isCropRect) return;
     if (!snapEnabled || (e.e && e.e.altKey)) { clearGuidelines(); return; }
 
     const action = e.transform ? e.transform.action : '';
@@ -364,71 +452,107 @@ function handleSnapping(e) {
     const isScaling = action.includes('scale');
     if (!isMoving && !isScaling) { clearGuidelines(); return; }
 
-    const objBounds = obj.getBoundingRect();
+    const pageThreshBase = Math.max(PAGE_SNAP_DISTANCE, 16 / currentZoom);
+    const objThreshBase = Math.max(SNAP_DISTANCE, 12 / currentZoom);
+
+    const objBounds = obj.getBoundingRect(true);
     const objCenter = obj.getCenterPoint();
-    const { xLines, yLines } = collectSnapAxes(obj);
-    if (!xLines.length && !yLines.length) { clearGuidelines(); return; }
+    const page = getObjectPageIndex(obj);
+    const targets = getPageEdgeTargets(obj);
+    canvas.getObjects().forEach(t => {
+        if (t === obj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
+        const tPage = getObjectPageIndex(t);
+        if (Math.abs(tPage - page) > 1) return;
+        const bounds = t.getBoundingRect(true);
+        const center = t.getCenterPoint();
+        targets.push({
+            left: bounds.left, centerX: center.x, right: bounds.left + bounds.width,
+            top: bounds.top, centerY: center.y, bottom: bounds.top + bounds.height
+        });
+    });
+
+    if (showRuleGrid) {
+        for (let i = 0; i < squareCount; i++) {
+            const ox = i * pageW;
+            targets.push({
+                left: ox + pageW / 3,
+                right: ox + (2 * pageW) / 3,
+                top: pageH / 3,
+                bottom: (2 * pageH) / 3,
+                isGrid: true
+            });
+        }
+    }
 
     let linesToDraw = [];
 
     if (isMoving) {
         let snapX = null, snapY = null;
-        let diffX = SNAP_DISTANCE + 1, diffY = SNAP_DISTANCE + 1;
+        let diffX = pageThreshBase + 1, diffY = pageThreshBase + 1;
         let finalLeft = obj.left, finalTop = obj.top;
 
-        const objXs = [
-            { val: objBounds.left, type: 'left' },
-            { val: objCenter.x, type: 'center' },
-            { val: objBounds.left + objBounds.width, type: 'right' }
-        ];
-        xLines.forEach(tx => {
-            objXs.forEach(ox => {
-                const d = Math.abs(ox.val - tx);
-                if (d < diffX) {
-                    diffX = d;
-                    snapX = tx;
-                    if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
-                    if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
-                    if (ox.type === 'right') finalLeft = obj.left + (tx - (objBounds.left + objBounds.width));
-                }
+        targets.forEach(t => {
+            const thresh = t.isPage ? pageThreshBase : objThreshBase;
+            const xEdges = (t.isPage || t.isGrid) ? [t.left, t.right] : [t.left, t.centerX, t.right];
+            const yEdges = (t.isPage || t.isGrid) ? [t.top, t.bottom] : [t.top, t.centerY, t.bottom];
+            const objXs = [
+                { val: objBounds.left, type: 'left' },
+                { val: objCenter.x, type: 'center' },
+                { val: objBounds.left + objBounds.width, type: 'right' }
+            ];
+            xEdges.forEach(tx => {
+                objXs.forEach(ox => {
+                    const d = Math.abs(ox.val - tx);
+                    if (d < thresh && d < diffX) {
+                        diffX = d;
+                        snapX = tx;
+                        if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
+                        if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
+                        if (ox.type === 'right') finalLeft = obj.left + (tx - (objBounds.left + objBounds.width));
+                    }
+                });
+            });
+            const objYs = [
+                { val: objBounds.top, type: 'top' },
+                { val: objCenter.y, type: 'center' },
+                { val: objBounds.top + objBounds.height, type: 'bottom' }
+            ];
+            yEdges.forEach(ty => {
+                objYs.forEach(oy => {
+                    const d = Math.abs(oy.val - ty);
+                    if (d < thresh && d < diffY) {
+                        diffY = d;
+                        snapY = ty;
+                        if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
+                        if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
+                        if (oy.type === 'bottom') finalTop = obj.top + (ty - (objBounds.top + objBounds.height));
+                    }
+                });
             });
         });
 
-        const objYs = [
-            { val: objBounds.top, type: 'top' },
-            { val: objCenter.y, type: 'center' },
-            { val: objBounds.top + objBounds.height, type: 'bottom' }
-        ];
-        yLines.forEach(ty => {
-            objYs.forEach(oy => {
-                const d = Math.abs(oy.val - ty);
-                if (d < diffY) {
-                    diffY = d;
-                    snapY = ty;
-                    if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
-                    if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
-                    if (oy.type === 'bottom') finalTop = obj.top + (ty - (objBounds.top + objBounds.height));
-                }
-            });
-        });
-
-        if (snapX !== null) linesToDraw.push([snapX, -10000, snapX, 10000]);
-        if (snapY !== null) linesToDraw.push([-10000, snapY, 10000, snapY]);
+        if (snapX !== null) linesToDraw.push([snapX, 0, snapX, pageH]);
+        if (snapY !== null) linesToDraw.push([page * pageW, snapY, (page + 1) * pageW, snapY]);
         pendingSnapMove = (snapX !== null || snapY !== null) ? { left: finalLeft, top: finalTop } : null;
     }
 
     if (isScaling) {
-        let activeCorner = e.transform.corner;
+        let activeCorner = e.transform.corner || '';
         let scaleSnapX = null, scaleSnapY = null;
-        let sDiffX = SNAP_DISTANCE + 1, sDiffY = SNAP_DISTANCE + 1;
+        let sDiffX = pageThreshBase + 1, sDiffY = pageThreshBase + 1;
 
-        if (activeCorner.includes('l')) xLines.forEach(tx => { const d = Math.abs(objBounds.left - tx); if (d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
-        else if (activeCorner.includes('r')) xLines.forEach(tx => { const d = Math.abs((objBounds.left + objBounds.width) - tx); if (d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
-        if (activeCorner.includes('t')) yLines.forEach(ty => { const d = Math.abs(objBounds.top - ty); if (d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
-        else if (activeCorner.includes('b')) yLines.forEach(ty => { const d = Math.abs((objBounds.top + objBounds.height) - ty); if (d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
+        targets.forEach(t => {
+            const thresh = t.isPage ? pageThreshBase : objThreshBase;
+            const targetXs = (t.isPage || t.isGrid) ? [t.left, t.right] : [t.left, t.centerX, t.right];
+            const targetYs = (t.isPage || t.isGrid) ? [t.top, t.bottom] : [t.top, t.centerY, t.bottom];
+            if (activeCorner.includes('l')) targetXs.forEach(tx => { const d = Math.abs(objBounds.left - tx); if (d < thresh && d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+            else if (activeCorner.includes('r')) targetXs.forEach(tx => { const d = Math.abs((objBounds.left + objBounds.width) - tx); if (d < thresh && d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+            if (activeCorner.includes('t')) targetYs.forEach(ty => { const d = Math.abs(objBounds.top - ty); if (d < thresh && d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
+            else if (activeCorner.includes('b')) targetYs.forEach(ty => { const d = Math.abs((objBounds.top + objBounds.height) - ty); if (d < thresh && d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
+        });
 
-        if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, -10000, scaleSnapX, 10000]);
-        if (scaleSnapY !== null) linesToDraw.push([-10000, scaleSnapY, 10000, scaleSnapY]);
+        if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, 0, scaleSnapX, pageH]);
+        if (scaleSnapY !== null) linesToDraw.push([page * pageW, scaleSnapY, (page + 1) * pageW, scaleSnapY]);
 
         let finalScaleX = obj.scaleX, finalScaleY = obj.scaleY, willSnapScale = false;
         if (!(e.e && e.e.shiftKey)) {
@@ -514,11 +638,25 @@ canvas.on('after:render', function() {
 // --- ZOOM & CENTER ---
 function applyZoom() {
     const wrapper = document.getElementById('canvas-wrapper');
-    wrapper.style.transform = `scale(${currentZoom})`;
+    const overlay = document.getElementById('overlay-layer');
+    const dispW = Math.max(1, pageW * squareCount * currentZoom);
+    const dispH = Math.max(1, pageH * currentZoom);
+    wrapper.style.transform = 'none';
+    wrapper.style.width = dispW + 'px';
+    wrapper.style.height = dispH + 'px';
+    wrapper.style.marginRight = '0px';
+    wrapper.style.marginBottom = '0px';
+    if (overlay) {
+        overlay.style.width = (pageW * squareCount) + 'px';
+        overlay.style.height = pageH + 'px';
+        overlay.style.transform = `scale(${currentZoom})`;
+    }
+    canvas.setDimensions({ width: dispW, height: dispH });
+    canvas.setZoom(currentZoom);
+    canvas.calcOffset();
     document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
-    wrapper.style.width = (pageW * squareCount) + 'px';
-    wrapper.style.height = pageH + 'px';
     centerStagePadding();
+    canvas.requestRenderAll();
 }
 
 function centerStagePadding() {
@@ -535,11 +673,6 @@ function centerStagePadding() {
     stage.style.paddingBottom = padY + 'px';
     stage.style.width = (totalW + padX * 2) + 'px';
     stage.style.minHeight = (scaledH + padY * 2) + 'px';
-    const wrapper = document.getElementById('canvas-wrapper');
-    const layoutW = pageW * squareCount;
-    const layoutH = pageH;
-    wrapper.style.marginRight = (totalW - layoutW) + 'px';
-    wrapper.style.marginBottom = (scaledH - layoutH) + 'px';
 }
 
 function fitToScreen() {
@@ -575,6 +708,7 @@ document.getElementById('workspace').addEventListener('wheel', function(e) {
 }, { passive: false });
 
 window.addEventListener('resize', () => {
+    canvas.calcOffset();
     centerStagePadding();
     updateMobileHint();
     applyInteractionMode();
@@ -585,12 +719,12 @@ window.addEventListener('resize', () => {
 function updateToolbarPosition() {
     const activeObj = canvas.getActiveObject();
     const toolbar = document.getElementById('floating-toolbar');
-    if (!activeObj || activeObj.isAlignmentLine || pageDrag.active) {
+    if (!activeObj || activeObj.isAlignmentLine || pageDrag.active || pageEditorMode) {
         toolbar.style.display = 'none';
         return;
     }
     toolbar.style.display = 'flex';
-    const boundingRect = activeObj.getBoundingRect();
+    const boundingRect = activeObj.getBoundingRect(true);
     toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
     toolbar.style.top = boundingRect.top + 'px';
 }
@@ -610,6 +744,10 @@ canvas.on('object:scaling', updateToolbarPosition);
 canvas.on('object:rotating', updateToolbarPosition);
 canvas.on('object:added', (e) => {
     if (e.target) configureObjectControls(e.target);
+    if (pageEditorMode && e.target && !e.target.isGuideLine && !e.target.isAlignmentLine && !e.target.isCropRect) {
+        e.target.selectable = false;
+        e.target.evented = false;
+    }
 });
 
 function bringGuidesToFront() {
@@ -632,6 +770,7 @@ function changeLayer(action) {
 
 // --- CROP ---
 function startCrop() {
+    if (pageEditorMode) return;
     imgToCrop = canvas.getActiveObject();
     if (!imgToCrop || imgToCrop.type !== 'image') {
         alert('Puoi ritagliare solo le immagini.');
@@ -743,14 +882,12 @@ function rebuildGuideLines() {
 
 function syncCanvasSize() {
     document.getElementById('square-badge').innerText = squareCount;
-    canvas.setWidth(pageW * squareCount);
-    canvas.setHeight(pageH);
-    document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
-    document.getElementById('canvas-wrapper').style.height = pageH + 'px';
     rebuildGuideLines();
     applyZoom();
     renderPagesUI();
     renderRuleGrid();
+    renderPageEditorFrames();
+    updateMobileHint();
 }
 
 function updateAspectToggleUI() {
@@ -872,6 +1009,7 @@ function movePage(fromIndex, toIndex) {
     canvas.renderAll();
     updateToolbarPosition();
     renderPagesUI();
+    renderPageEditorFrames();
     saveState();
     scrollToPage(toIndex, true);
 }
@@ -953,6 +1091,13 @@ function updateVisiblePageFromScroll() {
 }
 
 document.getElementById('workspace').addEventListener('scroll', () => {
+    const workspace = document.getElementById('workspace');
+    if (scrollLock.active) {
+        workspace.scrollLeft = scrollLock.left;
+        workspace.scrollTop = scrollLock.top;
+        return;
+    }
+    canvas.calcOffset();
     if (!pageDrag.active) updateVisiblePageFromScroll();
 }, { passive: true });
 
@@ -1034,10 +1179,10 @@ function capturePageOwnedPreview(pageIndex) {
 
     const dataURL = canvas.toDataURL({
         format: 'png',
-        left: pageIndex * pageW,
+        left: pageIndex * pageW * currentZoom,
         top: 0,
-        width: pageW,
-        height: pageH,
+        width: pageW * currentZoom,
+        height: pageH * currentZoom,
         enableRetinaScaling: false
     });
 
@@ -1159,10 +1304,8 @@ function endPageDragUI() {
     canvas.getObjects().forEach(o => {
         if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) return;
         o.visible = true;
-        o.selectable = true;
-        o.evented = true;
     });
-    canvas.selection = !isMobileUI();
+    applyObjectLockState();
     canvas.renderAll();
 }
 
@@ -1177,12 +1320,27 @@ function cancelPageDrag() {
 
 canvas.on('mouse:down', function(opt) {
     if (isCropping || pageDrag.active || pinchGesture.active || viewPan.active) return;
-    if (!isBackgroundTarget(opt.target)) return;
 
     const pt = clientPoint(opt.e);
     const workspace = document.getElementById('workspace');
     const pointer = canvas.getPointer(opt.e);
     const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / pageW)));
+
+    // Page editor: il drag sposta le pagine, non le foto
+    if (pageEditorMode) {
+        if (squareCount < 2) return;
+        pageDrag.startClientX = pt.x;
+        pageDrag.startClientY = pt.y;
+        pageDrag.fromIndex = pageIndex;
+        pageDrag.armed = true;
+        viewPan.pending = false;
+        return;
+    }
+
+    if (!isBackgroundTarget(opt.target)) {
+        beginScrollLock();
+        return;
+    }
 
     pageDrag.startClientX = pt.x;
     pageDrag.startClientY = pt.y;
@@ -1198,19 +1356,6 @@ canvas.on('mouse:down', function(opt) {
     } else {
         viewPan.pending = false;
     }
-
-    if (squareCount >= 2) {
-        pageDrag.armed = true;
-        pageDrag.ringTimer = setTimeout(() => {
-            if (pageDrag.armed && !viewPan.active) {
-                showLongPressRing(pageDrag.startClientX, pageDrag.startClientY);
-            }
-        }, LONG_PRESS_RING_DELAY);
-        pageDrag.timer = setTimeout(() => {
-            if (viewPan.active) return;
-            startPageDrag(pageIndex, pt.x, pt.y);
-        }, LONG_PRESS_MS);
-    }
 });
 
 canvas.on('mouse:move', function(opt) {
@@ -1222,11 +1367,19 @@ canvas.on('mouse:move', function(opt) {
     }
 
     if ((pageDrag.armed || viewPan.pending) && !pageDrag.active) {
-        const startX = viewPan.pending ? viewPan.startClientX : pageDrag.startClientX;
-        const startY = viewPan.pending ? viewPan.startClientY : pageDrag.startClientY;
+        const startX = pageEditorMode ? pageDrag.startClientX : (viewPan.pending ? viewPan.startClientX : pageDrag.startClientX);
+        const startY = pageEditorMode ? pageDrag.startClientY : (viewPan.pending ? viewPan.startClientY : pageDrag.startClientY);
         const dx = pt.x - startX;
         const dy = pt.y - startY;
         if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOL) {
+            if (pageEditorMode && pageDrag.armed) {
+                startPageDrag(pageDrag.fromIndex, pageDrag.startClientX, pageDrag.startClientY);
+                const ghost = document.getElementById('page-ghost');
+                ghost.style.left = pt.x + 'px';
+                ghost.style.top = pt.y + 'px';
+                updatePageDragVisuals(pt.x);
+                return;
+            }
             cancelLongPressArm();
             if (viewPan.pending && isMobileUI()) {
                 beginViewPan();
@@ -1252,6 +1405,7 @@ canvas.on('mouse:move', function(opt) {
 });
 
 function onPointerUp() {
+    endScrollLock();
     if (viewPan.active || viewPan.pending) {
         endViewPan();
     }
@@ -1291,6 +1445,7 @@ function clientToCanvasCoords(clientX, clientY) {
 }
 
 function beginPinchGesture(t1, t2) {
+    if (pageEditorMode) return false;
     const obj = canvas.getActiveObject();
     if (!obj || obj.isGuideLine || obj.isAlignmentLine) return false;
     // In crop: pinch solo sul rettangolo di ritaglio
@@ -1308,6 +1463,7 @@ function beginPinchGesture(t1, t2) {
 
     pinchGesture.active = true;
     pinchGesture.obj = obj;
+    beginScrollLock();
     pinchGesture.startDist = Math.max(1, touchDistance(t1, t2));
     pinchGesture.startAngle = touchAngleDeg(t1, t2);
     pinchGesture.baseScaleX = obj.scaleX || 1;
@@ -1359,6 +1515,7 @@ function endPinchGesture(commit) {
     const obj = pinchGesture.obj;
     pinchGesture.active = false;
     pinchGesture.obj = null;
+    endScrollLock();
     if (commit && obj) {
         obj.setCoords();
         // object:modified → saveState automatico
@@ -1388,9 +1545,8 @@ upperCanvas.addEventListener('touchmove', (e) => {
         updatePinchGesture(e.touches[0], e.touches[1]);
         return;
     }
-    if (pageDrag.armed || pageDrag.active || viewPan.active || viewPan.pending) {
-        e.preventDefault();
-    }
+    // Sempre: il drag di una foto non deve scrollare lo workspace
+    e.preventDefault();
 }, { passive: false, capture: true });
 
 upperCanvas.addEventListener('touchend', (e) => {
@@ -1406,6 +1562,7 @@ upperCanvas.addEventListener('touchend', (e) => {
 
 upperCanvas.addEventListener('touchcancel', () => {
     if (pinchGesture.active) endPinchGesture(false);
+    endScrollLock();
     cancelPageDrag();
 }, { capture: true });
 
@@ -1426,6 +1583,329 @@ function addSquare() {
     scrollToPage(squareCount - 1, true);
 }
 
+function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('decode failed'));
+        };
+        img.src = url;
+    });
+}
+
+function loadHtmlImage(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('decode failed'));
+        img.src = src;
+    });
+}
+
+function rasterizeImageElement(img, maxShortSide, quality) {
+    const srcW = img.naturalWidth || img.width;
+    const srcH = img.naturalHeight || img.height;
+    const shortSide = Math.min(srcW, srcH) || 1;
+    let w = srcW;
+    let h = srcH;
+    if (shortSide > maxShortSide) {
+        const scale = maxShortSide / shortSide;
+        w = Math.max(1, Math.round(srcW * scale));
+        h = Math.max(1, Math.round(srcH * scale));
+    }
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, w, h);
+    return {
+        dataURL: c.toDataURL('image/jpeg', quality),
+        width: w,
+        height: h
+    };
+}
+
+function dataURLToBlob(dataURL) {
+    const parts = String(dataURL).split(',');
+    const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+    const bin = atob(parts[1] || '');
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+}
+
+function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(blob);
+    });
+}
+
+function newHiResId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function openHiResDb() {
+    return new Promise((resolve, reject) => {
+        if (!window.indexedDB) {
+            reject(new Error('IndexedDB non disponibile'));
+            return;
+        }
+        const req = indexedDB.open(HIRES_DB_NAME, 1);
+        req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(HIRES_STORE)) {
+                db.createObjectStore(HIRES_STORE);
+            }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function putHiResBlob(id, blob) {
+    const db = await openHiResDb();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(HIRES_STORE, 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.objectStore(HIRES_STORE).put(blob, id);
+    });
+}
+
+async function getHiResBlob(id) {
+    if (!id) return null;
+    try {
+        const db = await openHiResDb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction(HIRES_STORE, 'readonly');
+            const req = tx.objectStore(HIRES_STORE).get(id);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+        });
+    } catch (err) {
+        console.warn('Lettura hi-res fallita', err);
+        return null;
+    }
+}
+
+function collectHiResIdsFromJson(json, into) {
+    const ids = into || new Set();
+    const walk = (objs) => {
+        (objs || []).forEach(o => {
+            if (o && o.hiResId) ids.add(o.hiResId);
+            if (o && o.objects) walk(o.objects);
+        });
+    };
+    walk(json && json.objects);
+    return ids;
+}
+
+function collectAllKnownHiResIds() {
+    const ids = new Set();
+    canvas.getObjects().forEach(o => {
+        if (o.hiResId) ids.add(o.hiResId);
+    });
+    historyStack.forEach(state => collectHiResIdsFromJson(state.json, ids));
+    return ids;
+}
+
+async function pruneHiResStore() {
+    try {
+        const keep = collectAllKnownHiResIds();
+        const db = await openHiResDb();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(HIRES_STORE, 'readwrite');
+            const store = tx.objectStore(HIRES_STORE);
+            const req = store.getAllKeys();
+            req.onsuccess = () => {
+                (req.result || []).forEach(key => {
+                    if (!keep.has(key)) store.delete(key);
+                });
+            };
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    } catch (err) {
+        // private mode / IDB pieno: l'anteprima resta comunque usabile
+    }
+}
+
+async function importHiResMap(map) {
+    if (!map || typeof map !== 'object') return;
+    for (const [id, dataURL] of Object.entries(map)) {
+        if (!id || !dataURL) continue;
+        try {
+            await putHiResBlob(id, dataURLToBlob(dataURL));
+        } catch (err) {
+            console.warn('Import hi-res fallito', id, err);
+        }
+    }
+}
+
+async function collectHiResDataUrls() {
+    const map = {};
+    const ids = new Set();
+    canvas.getObjects().forEach(o => { if (o.hiResId) ids.add(o.hiResId); });
+    for (const id of ids) {
+        const blob = await getHiResBlob(id);
+        if (blob) map[id] = await blobToDataURL(blob);
+    }
+    return map;
+}
+
+async function prepareImageForCanvas(file) {
+    const source = await loadImageFromFile(file);
+    const srcW = source.naturalWidth || source.width;
+    const srcH = source.naturalHeight || source.height;
+    const shortSide = Math.min(srcW, srcH) || 1;
+    const mobile = isMobileUI();
+
+    if (!mobile) {
+        if (shortSide <= MAX_IMAGE_SHORT_SIDE) {
+            return {
+                dataURL: await blobToDataURL(file),
+                hiResId: null,
+                proxyNaturalWidth: srcW,
+                proxyNaturalHeight: srcH
+            };
+        }
+        const display = rasterizeImageElement(source, MAX_IMAGE_SHORT_SIDE, 0.92);
+        return {
+            dataURL: display.dataURL,
+            hiResId: null,
+            proxyNaturalWidth: display.width,
+            proxyNaturalHeight: display.height
+        };
+    }
+
+    if (shortSide <= PROXY_SHORT_SIDE) {
+        return {
+            dataURL: await blobToDataURL(file),
+            hiResId: null,
+            proxyNaturalWidth: srcW,
+            proxyNaturalHeight: srcH
+        };
+    }
+
+    const display = rasterizeImageElement(source, PROXY_SHORT_SIDE, 0.82);
+
+    const hi = rasterizeImageElement(source, HIRES_SHORT_SIDE, 0.92);
+    const hiResId = newHiResId();
+    try {
+        await putHiResBlob(hiResId, dataURLToBlob(hi.dataURL));
+        return {
+            dataURL: display.dataURL,
+            hiResId,
+            proxyNaturalWidth: display.width,
+            proxyNaturalHeight: display.height
+        };
+    } catch (err) {
+        console.warn('IndexedDB hi-res non disponibile, uso qualità export in canvas', err);
+        return {
+            dataURL: hi.dataURL,
+            hiResId: null,
+            proxyNaturalWidth: hi.width,
+            proxyNaturalHeight: hi.height
+        };
+    }
+}
+
+async function withHighResSources(fn) {
+    const backups = [];
+    const images = canvas.getObjects().filter(o => o.type === 'image' && o.hiResId);
+    try {
+        for (const img of images) {
+            const blob = await getHiResBlob(img.hiResId);
+            if (!blob) continue;
+            const objectUrl = URL.createObjectURL(blob);
+            const hiEl = await loadHtmlImage(objectUrl);
+            const proxyW = img.proxyNaturalWidth || (img._originalElement && img._originalElement.naturalWidth) || img.width;
+            const proxyH = img.proxyNaturalHeight || (img._originalElement && img._originalElement.naturalHeight) || img.height;
+            const rx = (hiEl.naturalWidth || hiEl.width) / proxyW;
+            const ry = (hiEl.naturalHeight || hiEl.height) / proxyH;
+            if (!isFinite(rx) || !isFinite(ry) || rx <= 0 || ry <= 0) {
+                URL.revokeObjectURL(objectUrl);
+                continue;
+            }
+            const backup = {
+                img,
+                element: img._element,
+                originalElement: img._originalElement,
+                cropX: img.cropX || 0,
+                cropY: img.cropY || 0,
+                width: img.width,
+                height: img.height,
+                scaleX: img.scaleX,
+                scaleY: img.scaleY,
+                left: img.left,
+                top: img.top,
+                objectUrl
+            };
+            backups.push(backup);
+            img.setElement(hiEl);
+            img.set({
+                left: backup.left,
+                top: backup.top,
+                cropX: backup.cropX * rx,
+                cropY: backup.cropY * ry,
+                width: backup.width * rx,
+                height: backup.height * ry,
+                scaleX: backup.scaleX / rx,
+                scaleY: backup.scaleY / ry
+            });
+            img.dirty = true;
+            img.setCoords();
+        }
+        canvas.renderAll();
+        await fn();
+    } finally {
+        backups.forEach(backup => {
+            try {
+                backup.img.setElement(backup.originalElement || backup.element);
+                backup.img.set({
+                    left: backup.left,
+                    top: backup.top,
+                    cropX: backup.cropX,
+                    cropY: backup.cropY,
+                    width: backup.width,
+                    height: backup.height,
+                    scaleX: backup.scaleX,
+                    scaleY: backup.scaleY
+                });
+                backup.img.dirty = true;
+                backup.img.setCoords();
+            } catch (err) {
+                console.warn('Ripristino proxy fallito', err);
+            }
+            URL.revokeObjectURL(backup.objectUrl);
+        });
+        canvas.renderAll();
+    }
+}
+
+async function withNativeCanvasResolution(fn) {
+    canvas.setZoom(1);
+    canvas.setDimensions({ width: pageW * squareCount, height: pageH });
+    canvas.renderAll();
+    try {
+        return await fn();
+    } finally {
+        applyZoom();
+    }
+}
+
 document.getElementById('image-upload').addEventListener('change', async function(e) {
     const files = e.target.files;
     if (!files.length) return;
@@ -1433,15 +1913,18 @@ document.getElementById('image-upload').addEventListener('change', async functio
         alert('Editor non pronto. Ricarica la pagina.');
         return;
     }
+    if (pageEditorMode) setPageEditorMode(false);
     const baseLeft = currentVisiblePage * pageW;
     const fileList = Array.from(files);
     e.target.value = '';
+    const hint = document.getElementById('hint-toast');
+    if (hint) hint.textContent = 'Caricamento foto…';
 
     for (let i = 0; i < fileList.length; i++) {
         try {
-            const dataURL = await readAndDownscaleImage(fileList[i], MAX_IMAGE_SHORT_SIDE);
+            const prepared = await prepareImageForCanvas(fileList[i]);
             await new Promise((resolve, reject) => {
-                fabric.Image.fromURL(dataURL, function(img) {
+                fabric.Image.fromURL(prepared.dataURL, function(img) {
                     try {
                         if (!img || typeof img.width !== 'number') {
                             reject(new Error('Immagine non decodificata'));
@@ -1453,7 +1936,10 @@ document.getElementById('image-upload').addEventListener('change', async functio
 
                         img.set({
                             left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
-                            top: (pageH / 2) - (img.getScaledHeight() / 2)
+                            top: (pageH / 2) - (img.getScaledHeight() / 2),
+                            hiResId: prepared.hiResId || undefined,
+                            proxyNaturalWidth: prepared.proxyNaturalWidth,
+                            proxyNaturalHeight: prepared.proxyNaturalHeight
                         });
                         canvas.add(img);
                         canvas.setActiveObject(img);
@@ -1469,44 +1955,11 @@ document.getElementById('image-upload').addEventListener('change', async functio
             console.warn('Caricamento immagine fallito', err);
         }
     }
+    updateMobileHint();
 });
 
-/** Legge un file e, se serve, ridimensiona il lato corto a maxShortSide (bitmap reale). */
-function readAndDownscaleImage(file, maxShortSide) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(reader.error || new Error('read failed'));
-        reader.onload = () => {
-            const src = reader.result;
-            const img = new Image();
-            img.onload = () => {
-                const shortSide = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
-                if (shortSide <= maxShortSide) {
-                    resolve(src);
-                    return;
-                }
-                const scale = maxShortSide / shortSide;
-                const w = Math.max(1, Math.round(img.naturalWidth * scale));
-                const h = Math.max(1, Math.round(img.naturalHeight * scale));
-                const c = document.createElement('canvas');
-                c.width = w;
-                c.height = h;
-                const ctx = c.getContext('2d');
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(img, 0, 0, w, h);
-                // JPEG più leggero in memoria / localStorage (foto carousel)
-                resolve(c.toDataURL('image/jpeg', 0.92));
-            };
-            img.onerror = () => reject(new Error('decode failed'));
-            img.src = src;
-        };
-        reader.readAsDataURL(file);
-    });
-}
-
 function deleteSelected() {
-    if (isCropping || pageDrag.active) return;
+    if (isCropping || pageDrag.active || pageEditorMode) return;
     const activeObjects = canvas.getActiveObjects();
     if (activeObjects.length) {
         canvas.discardActiveObject();
@@ -1518,6 +1971,10 @@ window.addEventListener('keydown', function(e) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === 'Escape') {
         if (pinchGesture.active) endPinchGesture(false);
+        if (pageEditorMode) {
+            setPageEditorMode(false);
+            return;
+        }
         cancelPageDrag();
     }
     if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
@@ -1527,24 +1984,42 @@ window.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeLayer('down'); }
 });
 
-function exportCarousel() {
-    guideLines.forEach(line => line.set('opacity', 0));
-    canvas.discardActiveObject();
-    canvas.renderAll();
-    for (let i = 0; i < squareCount; i++) {
-        const dataURL = canvas.toDataURL({
-            format: 'jpeg', quality: 1,
-            left: i * pageW, top: 0, width: pageW, height: pageH
+async function exportCarousel() {
+    if (isExporting || isCropping || pageDrag.active) return;
+    isExporting = true;
+    const hint = document.getElementById('hint-toast');
+    if (hint && !pageEditorMode) hint.textContent = 'Esportazione in alta risoluzione…';
+    try {
+        await withHighResSources(async () => {
+            await withNativeCanvasResolution(async () => {
+                guideLines.forEach(line => line.set('opacity', 0));
+                canvas.discardActiveObject();
+                canvas.renderAll();
+                for (let i = 0; i < squareCount; i++) {
+                    const dataURL = canvas.toDataURL({
+                        format: 'jpeg', quality: 1,
+                        left: i * pageW, top: 0, width: pageW, height: pageH,
+                        enableRetinaScaling: false
+                    });
+                    const link = document.createElement('a');
+                    link.download = `carousel-slide-${i + 1}.jpg`;
+                    link.href = dataURL;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    await new Promise(r => setTimeout(r, 180));
+                }
+                guideLines.forEach(line => line.set('opacity', 1));
+                canvas.renderAll();
+            });
         });
-        const link = document.createElement('a');
-        link.download = `carousel-slide-${i + 1}.jpg`;
-        link.href = dataURL;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    } catch (err) {
+        console.warn('Export fallito', err);
+        alert('Esportazione non riuscita.');
+    } finally {
+        isExporting = false;
+        updateMobileHint();
     }
-    guideLines.forEach(line => line.set('opacity', 1));
-    canvas.renderAll();
 }
 
 // --- PERSISTENZA & PROGETTO ---
@@ -1559,6 +2034,17 @@ function buildProjectPayload() {
         json: canvas.toJSON(FABRIC_JSON_PROPS),
         savedAt: Date.now()
     };
+}
+
+function stripEmbeddedHiRes(json) {
+    if (!json || typeof json !== 'object' || Array.isArray(json)) {
+        return { json, hiRes: undefined };
+    }
+    if (!json._carouselHiRes) return { json, hiRes: undefined };
+    const clone = { ...json };
+    const hiRes = clone._carouselHiRes;
+    delete clone._carouselHiRes;
+    return { json: clone, hiRes };
 }
 
 function applyProjectPayload(payload, { resetHistory = true } = {}) {
@@ -1585,9 +2071,14 @@ function applyProjectPayload(payload, { resetHistory = true } = {}) {
             isHistoryAction = true;
             if (isCropping) cancelCrop();
             cancelPageDrag();
+            if (pageEditorMode) setPageEditorMode(false);
             if (typeof endPinchGesture === 'function') endPinchGesture(false);
 
-            canvas.loadFromJSON(payload.json, function() {
+            const extracted = stripEmbeddedHiRes(payload.json);
+            const json = extracted.json;
+            const hiRes = payload.hiRes || extracted.hiRes;
+
+            canvas.loadFromJSON(json, async function() {
                 try {
                     squareCount = payload.squareCount || 1;
                     aspectRatio = resolveAspectKey(payload.aspectRatio || '1:1');
@@ -1601,6 +2092,10 @@ function applyProjectPayload(payload, { resetHistory = true } = {}) {
                         document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
                     }
 
+                    if (hiRes) {
+                        await importHiResMap(hiRes);
+                    }
+
                     syncCanvasSize();
                     guideLines = canvas.getObjects().filter(o => o.isGuideLine);
                     if (guideLines.length !== Math.max(0, squareCount - 1)) rebuildGuideLines();
@@ -1611,6 +2106,7 @@ function applyProjectPayload(payload, { resetHistory = true } = {}) {
                     fitToScreen();
                     applyInteractionMode();
                     configureAllObjectControls();
+                    applyObjectLockState();
                     updateMobileHint();
                     updateToolbarPosition();
                     finish(resolve);
@@ -1630,6 +2126,7 @@ function persistProject() {
     } catch (err) {
         console.warn('Autosave non disponibile (quota o private mode)', err);
     }
+    pruneHiResStore();
 }
 
 async function restoreProject() {
@@ -1648,15 +2145,16 @@ async function restoreProject() {
     }
 }
 
-function saveProjectFile() {
+async function saveProjectFile() {
     if (isCropping || pageDrag.active) return;
     try {
         const payload = buildProjectPayload();
-        // .CMF = Carousel Maker File (JSON sotto il cofano; estensione solo estetica)
+        payload.hiRes = await collectHiResDataUrls();
         const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         const link = document.createElement('a');
+        // .CMF = Carousel Maker File (JSON sotto il cofano; estensione solo estetica)
         link.download = `carousel-progetto-${stamp}.cmf`;
         link.href = url;
         document.body.appendChild(link);
@@ -1872,11 +2370,20 @@ async function logout() {
 
 const CLOUD_PROJECT_LIMIT = 3;
 
-function projectRowFromLocal(name) {
+async function projectRowFromLocal(name) {
     const payload = buildProjectPayload();
+    const canvas_data = { ...(payload.json || {}) };
+    try {
+        const hiRes = await collectHiResDataUrls();
+        if (hiRes && Object.keys(hiRes).length) {
+            canvas_data._carouselHiRes = hiRes;
+        }
+    } catch (err) {
+        console.warn('Allegato hi-res cloud non disponibile', err);
+    }
     return {
         name,
-        canvas_data: payload.json,
+        canvas_data,
         square_count: payload.squareCount,
         background_color: payload.backgroundColor || '#ffffff',
         aspect_ratio: payload.aspectRatio || '1:1',
@@ -1884,13 +2391,15 @@ function projectRowFromLocal(name) {
 }
 
 function localPayloadFromRow(row) {
+    const extracted = stripEmbeddedHiRes(row.canvas_data);
     return {
         type: PROJECT_TYPE,
         version: PROJECT_VERSION,
         squareCount: row.square_count || 1,
         aspectRatio: row.aspect_ratio || '1:1',
         backgroundColor: row.background_color || '#ffffff',
-        json: row.canvas_data,
+        json: extracted.json,
+        hiRes: extracted.hiRes,
         savedAt: Date.now(),
     };
 }
@@ -1948,7 +2457,7 @@ async function saveCurrentProject() {
     const btn = document.getElementById('btn-cloud-save');
     if (btn) { btn.disabled = true; btn.classList.add('opacity-60'); }
     try {
-        const { name, ...row } = projectRowFromLocal(currentProjectName || 'Senza nome');
+        const { name, ...row } = await projectRowFromLocal(currentProjectName || 'Senza nome');
         const { error } = await requireSupabase()
             .from('projects')
             .update(row)
@@ -1995,7 +2504,7 @@ async function saveAsNewProject() {
 
         const row = {
             user_id: currentUser.id,
-            ...projectRowFromLocal(name),
+            ...(await projectRowFromLocal(name)),
             name,
         };
         const { data, error } = await requireSupabase()
@@ -2202,6 +2711,8 @@ Object.assign(window, {
   changeLayer,
   toggleRuleGrid,
   toggleSnap,
+  togglePageEditorMode,
+  setPageEditorMode,
   openAuthModal,
   closeAuthModal,
   switchAuthTab,

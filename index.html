@@ -45,9 +45,14 @@
             </div>
         </div>
         <p id="hint-toast" class="text-[11px] text-gray-500 text-center leading-tight px-2">
-            Tieni premuto 1s sullo <strong>sfondo</strong> di una pagina per trascinarla
+            Sposta le foto liberamente · <strong>Pagine</strong> per riordinare il carousel
         </p>
     </header>
+
+    <div id="page-editor-bar">
+        <span>Trascina una pagina per spostarla</span>
+        <button type="button" onclick="setPageEditorMode(false)" class="bg-white text-indigo-700 font-bold px-3 py-1 rounded-full text-sm">Fatto</button>
+    </div>
 
     <!-- Indicatori pagine + formato -->
     <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
@@ -87,16 +92,18 @@
         <div id="canvas-stage" class="relative">
             <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
                 <canvas id="canvas"></canvas>
+                <div id="overlay-layer">
                 <div id="rule-grid"></div>
+                <div id="page-editor-frames"></div>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
 
-                <button onclick="addSquare()" title="Aggiungi pagina" class="absolute top-1/2 -right-14 -translate-y-1/2 w-11 h-11 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-2xl text-indigo-600 active:scale-95 z-10">
+                <button onclick="addSquare()" title="Aggiungi pagina" class="overlay-hit absolute top-1/2 -right-14 -translate-y-1/2 w-11 h-11 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-2xl text-indigo-600 active:scale-95 z-10">
                     +
                     <span id="square-badge" class="absolute -top-1 -right-1 bg-indigo-600 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">1</span>
                 </button>
 
-                <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
+                <div id="floating-toolbar" class="overlay-hit absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
                     <div id="normal-tools" class="flex gap-1 items-center">
                         <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg" aria-label="Ritaglia">✂️</button>
                         <div class="w-px h-6 bg-gray-300 mx-1"></div>
@@ -109,6 +116,7 @@
                         <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm" aria-label="Applica ritaglio">✓</button>
                         <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm" aria-label="Annulla ritaglio">✗</button>
                     </div>
+                </div>
                 </div>
             </div>
         </div>
@@ -132,6 +140,8 @@
             <button onclick="document.getElementById('image-upload').click()" class="dock-btn" title="Carica"><span class="ico">🖼️</span>Foto</button>
 
             <button onclick="addSquare()" class="dock-btn text-indigo-600" title="Aggiungi pagina"><span class="ico">➕</span>Pagina</button>
+
+            <button id="btn-page-editor" onclick="togglePageEditorMode()" class="dock-btn" title="Riordina pagine" aria-pressed="false"><span class="ico">📑</span>Pagine</button>
 
             <button onclick="deleteSelected()" class="dock-btn text-red-500" title="Elimina selezione"><span class="ico">🗑️</span>Elimina</button>
 
