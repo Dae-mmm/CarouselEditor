@@ -259,13 +259,78 @@
             height: 1px;
         }
 
-        #btn-grid.is-active {
+        #btn-grid.is-active,
+        #btn-page-editor.is-active {
             background: #eef2ff;
             color: #4f46e5;
         }
 
         #hint-toast {
             pointer-events: none;
+        }
+
+        #page-editor-bar {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 8px 12px;
+            background: #4f46e5;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 30;
+        }
+        body.page-editor-mode #page-editor-bar { display: flex; }
+        body.page-editor-mode header #hint-toast { display: none; }
+
+        #page-editor-frames {
+            display: none;
+            position: absolute;
+            left: 0;
+            top: 0;
+            pointer-events: none;
+            z-index: 18;
+        }
+        body.page-editor-mode #page-editor-frames { display: block; }
+        body.page-dragging #page-editor-frames { display: none; }
+        .page-editor-frame {
+            position: absolute;
+            top: 0;
+            box-sizing: border-box;
+            border: 5px solid #4f46e5;
+            background: rgba(79, 70, 229, 0.08);
+        }
+        .page-editor-frame .badge {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            min-width: 36px;
+            height: 36px;
+            padding: 0 10px;
+            border-radius: 999px;
+            background: #4f46e5;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 20px rgba(79, 70, 229, 0.35);
+        }
+        .page-editor-frame .grip {
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff;
+            color: #4f46e5;
+            font-size: 18px;
+            letter-spacing: -2px;
+            font-weight: 900;
+            padding: 4px 12px;
+            border-radius: 999px;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
         }
     </style>
 </head>
@@ -287,9 +352,14 @@
             <span id="offline-badge" class="items-center text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">Offline</span>
         </div>
         <p id="hint-toast" class="text-[11px] text-gray-500 text-center leading-tight px-2">
-            Tieni premuto 1s sullo <strong>sfondo</strong> di una pagina per trascinarla
+            Sposta le foto liberamente · <strong>Pagine</strong> per riordinare il carousel
         </p>
     </header>
+
+    <div id="page-editor-bar">
+        <span>Trascina una pagina per spostarla</span>
+        <button type="button" onclick="setPageEditorMode(false)" class="bg-white text-indigo-700 font-bold px-3 py-1 rounded-full text-sm">Fatto</button>
+    </div>
 
     <!-- Indicatori pagine + formato -->
     <div class="bg-white border-b border-gray-100 px-3 py-2 z-20 flex flex-col items-center gap-2">
@@ -327,6 +397,7 @@
             <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
                 <canvas id="canvas"></canvas>
                 <div id="rule-grid"></div>
+                <div id="page-editor-frames"></div>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
 
@@ -372,6 +443,8 @@
 
             <button onclick="addSquare()" class="dock-btn text-indigo-600" title="Aggiungi pagina"><span class="ico">➕</span>Pagina</button>
 
+            <button id="btn-page-editor" onclick="togglePageEditorMode()" class="dock-btn" title="Riordina pagine" aria-pressed="false"><span class="ico">📑</span>Pagine</button>
+
             <button onclick="deleteSelected()" class="dock-btn text-red-500" title="Elimina selezione"><span class="ico">🗑️</span>Elimina</button>
 
             <button onclick="exportCarousel()" class="dock-btn text-indigo-700" title="Esporta JPEG"><span class="ico">📤</span>Esporta</button>
@@ -403,14 +476,19 @@
             '4:3': '1.91:1'
         };
         const MAX_IMAGE_SHORT_SIDE = 1350;
+        const PROXY_SHORT_SIDE = 720;   // anteprima mobile: leggera in canvas
+        const HIRES_SHORT_SIDE = 2160;  // originale per export
         const STORAGE_KEY = 'carousel-maker-project-v4';
         const PROJECT_TYPE = 'carousel-maker-project';
-        const PROJECT_VERSION = 1;
-        const FABRIC_JSON_PROPS = ['isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect'];
-        const LONG_PRESS_MS = 1000;
+        const PROJECT_VERSION = 2;
+        const FABRIC_JSON_PROPS = [
+            'isGuideLine', 'selectable', 'evented', 'isAlignmentLine', 'isCropRect',
+            'hiResId', 'proxyNaturalWidth', 'proxyNaturalHeight'
+        ];
         const LONG_PRESS_MOVE_TOL = 12;
-        const LONG_PRESS_RING_DELAY = 380;
         const FIT_SCALE = 0.86; // pagine un filo più piccole del fit pieno
+        const HIRES_DB_NAME = 'carousel-maker-hires-v1';
+        const HIRES_STORE = 'images';
 
         let aspectRatio = '1:1';
         let pageW = ASPECT_PRESETS['1:1'].w;
@@ -438,8 +516,10 @@
 
         let deferredInstallPrompt = null;
         let currentVisiblePage = 0;
+        let pageEditorMode = false;
+        let isExporting = false;
 
-        // --- Long-press page drag state ---
+        // --- Page drag state (solo in Page editor mode) ---
         const pageDrag = {
             timer: null,
             ringTimer: null,
@@ -485,16 +565,81 @@
         function updateMobileHint() {
             const hint = document.getElementById('hint-toast');
             if (!hint) return;
-            if (isMobileUI()) {
-                hint.innerHTML = 'Trascina lo <strong>sfondo</strong> per spostare la vista · Tieni 1s per riordinare · Pinch sull’immagine';
+            if (pageEditorMode) {
+                hint.innerHTML = squareCount < 2
+                    ? 'Aggiungi almeno due pagine, poi trascina per riordinarle'
+                    : 'Trascina una <strong>pagina</strong> per spostarla · Fatto per tornare alle foto';
+            } else if (isMobileUI()) {
+                hint.innerHTML = 'Sposta le foto liberamente · <strong>Pagine</strong> per riordinare il carousel';
             } else {
-                hint.innerHTML = 'Trascina sullo <strong>sfondo</strong> per selezione multipla · Tieni 1s per spostare una pagina';
+                hint.innerHTML = 'Modifica le foto · <strong>Pagine</strong> per riordinare il carousel';
+            }
+        }
+
+        function applyObjectLockState() {
+            const lock = pageEditorMode || pageDrag.active;
+            canvas.selection = !lock && !isMobileUI();
+            canvas.forEachObject(o => {
+                if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) {
+                    o.selectable = false;
+                    o.evented = false;
+                    return;
+                }
+                o.selectable = !lock;
+                o.evented = !lock;
+            });
+            if (lock) {
+                canvas.discardActiveObject();
+                updateToolbarPosition();
             }
         }
 
         function applyInteractionMode() {
-            // Marquee / selezione multipla solo su PC; su mobile il drag sullo sfondo fa pan
-            canvas.selection = !isMobileUI();
+            applyObjectLockState();
+        }
+
+        function renderPageEditorFrames() {
+            const el = document.getElementById('page-editor-frames');
+            if (!el) return;
+            el.innerHTML = '';
+            el.style.width = (pageW * squareCount) + 'px';
+            el.style.height = pageH + 'px';
+            for (let i = 0; i < squareCount; i++) {
+                const frame = document.createElement('div');
+                frame.className = 'page-editor-frame';
+                frame.style.left = (i * pageW) + 'px';
+                frame.style.width = pageW + 'px';
+                frame.style.height = pageH + 'px';
+                frame.innerHTML = `<span class="badge">${i + 1}</span><span class="grip">⋮⋮</span>`;
+                el.appendChild(frame);
+            }
+        }
+
+        function setPageEditorMode(on) {
+            on = !!on;
+            if (on === pageEditorMode) {
+                applyObjectLockState();
+                renderPageEditorFrames();
+                updateMobileHint();
+                return;
+            }
+            if (on && isCropping) cancelCrop();
+            if (!on) cancelPageDrag();
+            pageEditorMode = on;
+            document.body.classList.toggle('page-editor-mode', pageEditorMode);
+            const btn = document.getElementById('btn-page-editor');
+            if (btn) {
+                btn.classList.toggle('is-active', pageEditorMode);
+                btn.setAttribute('aria-pressed', pageEditorMode ? 'true' : 'false');
+            }
+            applyObjectLockState();
+            renderPageEditorFrames();
+            updateMobileHint();
+            canvas.requestRenderAll();
+        }
+
+        function togglePageEditorMode() {
+            setPageEditorMode(!pageEditorMode);
         }
 
         // --- ROTAZIONE ---
@@ -645,8 +790,11 @@
                 isHistoryAction = false;
                 updateUndoRedoUI();
                 configureAllObjectControls();
+                applyObjectLockState();
                 updateToolbarPosition();
                 renderPagesUI();
+                renderRuleGrid();
+                renderPageEditorFrames();
                 applyZoom();
                 persistProject();
             });
@@ -919,7 +1067,7 @@
         function updateToolbarPosition() {
             const activeObj = canvas.getActiveObject();
             const toolbar = document.getElementById('floating-toolbar');
-            if (!activeObj || activeObj.isAlignmentLine || pageDrag.active) {
+            if (!activeObj || activeObj.isAlignmentLine || pageDrag.active || pageEditorMode) {
                 toolbar.style.display = 'none';
                 return;
             }
@@ -944,6 +1092,10 @@
         canvas.on('object:rotating', updateToolbarPosition);
         canvas.on('object:added', (e) => {
             if (e.target) configureObjectControls(e.target);
+            if (pageEditorMode && e.target && !e.target.isGuideLine && !e.target.isAlignmentLine && !e.target.isCropRect) {
+                e.target.selectable = false;
+                e.target.evented = false;
+            }
         });
 
         function bringGuidesToFront() {
@@ -966,6 +1118,7 @@
 
         // --- CROP ---
         function startCrop() {
+            if (pageEditorMode) return;
             imgToCrop = canvas.getActiveObject();
             if (!imgToCrop || imgToCrop.type !== 'image') {
                 alert('Puoi ritagliare solo le immagini.');
@@ -1085,6 +1238,8 @@
             applyZoom();
             renderPagesUI();
             renderRuleGrid();
+            renderPageEditorFrames();
+            updateMobileHint();
         }
 
         function updateAspectToggleUI() {
@@ -1206,6 +1361,7 @@
             canvas.renderAll();
             updateToolbarPosition();
             renderPagesUI();
+            renderPageEditorFrames();
             saveState();
             scrollToPage(toIndex, true);
         }
@@ -1493,10 +1649,8 @@
             canvas.getObjects().forEach(o => {
                 if (o.isGuideLine || o.isAlignmentLine || o.isCropRect) return;
                 o.visible = true;
-                o.selectable = true;
-                o.evented = true;
             });
-            canvas.selection = !isMobileUI();
+            applyObjectLockState();
             canvas.renderAll();
         }
 
@@ -1511,12 +1665,24 @@
 
         canvas.on('mouse:down', function(opt) {
             if (isCropping || pageDrag.active || pinchGesture.active || viewPan.active) return;
-            if (!isBackgroundTarget(opt.target)) return;
 
             const pt = clientPoint(opt.e);
             const workspace = document.getElementById('workspace');
             const pointer = canvas.getPointer(opt.e);
             const pageIndex = Math.max(0, Math.min(squareCount - 1, Math.floor(pointer.x / pageW)));
+
+            // Page editor: il drag sposta le pagine, non le foto
+            if (pageEditorMode) {
+                if (squareCount < 2) return;
+                pageDrag.startClientX = pt.x;
+                pageDrag.startClientY = pt.y;
+                pageDrag.fromIndex = pageIndex;
+                pageDrag.armed = true;
+                viewPan.pending = false;
+                return;
+            }
+
+            if (!isBackgroundTarget(opt.target)) return;
 
             pageDrag.startClientX = pt.x;
             pageDrag.startClientY = pt.y;
@@ -1532,19 +1698,6 @@
             } else {
                 viewPan.pending = false;
             }
-
-            if (squareCount >= 2) {
-                pageDrag.armed = true;
-                pageDrag.ringTimer = setTimeout(() => {
-                    if (pageDrag.armed && !viewPan.active) {
-                        showLongPressRing(pageDrag.startClientX, pageDrag.startClientY);
-                    }
-                }, LONG_PRESS_RING_DELAY);
-                pageDrag.timer = setTimeout(() => {
-                    if (viewPan.active) return;
-                    startPageDrag(pageIndex, pt.x, pt.y);
-                }, LONG_PRESS_MS);
-            }
         });
 
         canvas.on('mouse:move', function(opt) {
@@ -1556,11 +1709,19 @@
             }
 
             if ((pageDrag.armed || viewPan.pending) && !pageDrag.active) {
-                const startX = viewPan.pending ? viewPan.startClientX : pageDrag.startClientX;
-                const startY = viewPan.pending ? viewPan.startClientY : pageDrag.startClientY;
+                const startX = pageEditorMode ? pageDrag.startClientX : (viewPan.pending ? viewPan.startClientX : pageDrag.startClientX);
+                const startY = pageEditorMode ? pageDrag.startClientY : (viewPan.pending ? viewPan.startClientY : pageDrag.startClientY);
                 const dx = pt.x - startX;
                 const dy = pt.y - startY;
                 if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOL) {
+                    if (pageEditorMode && pageDrag.armed) {
+                        startPageDrag(pageDrag.fromIndex, pageDrag.startClientX, pageDrag.startClientY);
+                        const ghost = document.getElementById('page-ghost');
+                        ghost.style.left = pt.x + 'px';
+                        ghost.style.top = pt.y + 'px';
+                        updatePageDragVisuals(pt.x);
+                        return;
+                    }
                     cancelLongPressArm();
                     if (viewPan.pending && isMobileUI()) {
                         beginViewPan();
@@ -1625,6 +1786,7 @@
         }
 
         function beginPinchGesture(t1, t2) {
+            if (pageEditorMode) return false;
             const obj = canvas.getActiveObject();
             if (!obj || obj.isGuideLine || obj.isAlignmentLine) return false;
             // In crop: pinch solo sul rettangolo di ritaglio
@@ -1767,15 +1929,18 @@
                 alert('Editor non pronto. Ricarica la pagina.');
                 return;
             }
+            if (pageEditorMode) setPageEditorMode(false);
             const baseLeft = currentVisiblePage * pageW;
             const fileList = Array.from(files);
             e.target.value = '';
+            const hint = document.getElementById('hint-toast');
+            if (hint) hint.textContent = 'Caricamento foto…';
 
             for (let i = 0; i < fileList.length; i++) {
                 try {
-                    const dataURL = await readAndDownscaleImage(fileList[i], MAX_IMAGE_SHORT_SIDE);
+                    const prepared = await prepareImageForCanvas(fileList[i]);
                     await new Promise((resolve, reject) => {
-                        fabric.Image.fromURL(dataURL, function(img) {
+                        fabric.Image.fromURL(prepared.dataURL, function(img) {
                             try {
                                 if (!img || typeof img.width !== 'number') {
                                     reject(new Error('Immagine non decodificata'));
@@ -1787,7 +1952,10 @@
 
                                 img.set({
                                     left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
-                                    top: (pageH / 2) - (img.getScaledHeight() / 2)
+                                    top: (pageH / 2) - (img.getScaledHeight() / 2),
+                                    hiResId: prepared.hiResId || undefined,
+                                    proxyNaturalWidth: prepared.proxyNaturalWidth,
+                                    proxyNaturalHeight: prepared.proxyNaturalHeight
                                 });
                                 canvas.add(img);
                                 canvas.setActiveObject(img);
@@ -1803,44 +1971,324 @@
                     console.warn('Caricamento immagine fallito', err);
                 }
             }
+            updateMobileHint();
         });
 
-        /** Legge un file e, se serve, ridimensiona il lato corto a maxShortSide (bitmap reale). */
-        function readAndDownscaleImage(file, maxShortSide) {
+        function loadImageFromFile(file) {
             return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onerror = () => reject(reader.error || new Error('read failed'));
-                reader.onload = () => {
-                    const src = reader.result;
-                    const img = new Image();
-                    img.onload = () => {
-                        const shortSide = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
-                        if (shortSide <= maxShortSide) {
-                            resolve(src);
-                            return;
-                        }
-                        const scale = maxShortSide / shortSide;
-                        const w = Math.max(1, Math.round(img.naturalWidth * scale));
-                        const h = Math.max(1, Math.round(img.naturalHeight * scale));
-                        const c = document.createElement('canvas');
-                        c.width = w;
-                        c.height = h;
-                        const ctx = c.getContext('2d');
-                        ctx.imageSmoothingEnabled = true;
-                        ctx.imageSmoothingQuality = 'high';
-                        ctx.drawImage(img, 0, 0, w, h);
-                        // JPEG più leggero in memoria / localStorage (foto carousel)
-                        resolve(c.toDataURL('image/jpeg', 0.92));
-                    };
-                    img.onerror = () => reject(new Error('decode failed'));
-                    img.src = src;
+                const url = URL.createObjectURL(file);
+                const img = new Image();
+                img.onload = () => {
+                    URL.revokeObjectURL(url);
+                    resolve(img);
                 };
-                reader.readAsDataURL(file);
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('decode failed'));
+                };
+                img.src = url;
             });
         }
 
+        function loadHtmlImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('decode failed'));
+                img.src = src;
+            });
+        }
+
+        function rasterizeImageElement(img, maxShortSide, quality) {
+            const srcW = img.naturalWidth || img.width;
+            const srcH = img.naturalHeight || img.height;
+            const shortSide = Math.min(srcW, srcH) || 1;
+            let w = srcW;
+            let h = srcH;
+            if (shortSide > maxShortSide) {
+                const scale = maxShortSide / shortSide;
+                w = Math.max(1, Math.round(srcW * scale));
+                h = Math.max(1, Math.round(srcH * scale));
+            }
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            const ctx = c.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, w, h);
+            return {
+                dataURL: c.toDataURL('image/jpeg', quality),
+                width: w,
+                height: h
+            };
+        }
+
+        function dataURLToBlob(dataURL) {
+            const parts = String(dataURL).split(',');
+            const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+            const bin = atob(parts[1] || '');
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            return new Blob([arr], { type: mime });
+        }
+
+        function blobToDataURL(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error('read failed'));
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function newHiResId() {
+            if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+            return 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+        }
+
+        function openHiResDb() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) {
+                    reject(new Error('IndexedDB non disponibile'));
+                    return;
+                }
+                const req = indexedDB.open(HIRES_DB_NAME, 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(HIRES_STORE)) {
+                        db.createObjectStore(HIRES_STORE);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function putHiResBlob(id, blob) {
+            const db = await openHiResDb();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(HIRES_STORE, 'readwrite');
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.objectStore(HIRES_STORE).put(blob, id);
+            });
+        }
+
+        async function getHiResBlob(id) {
+            if (!id) return null;
+            try {
+                const db = await openHiResDb();
+                return await new Promise((resolve, reject) => {
+                    const tx = db.transaction(HIRES_STORE, 'readonly');
+                    const req = tx.objectStore(HIRES_STORE).get(id);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => reject(req.error);
+                });
+            } catch (err) {
+                console.warn('Lettura hi-res fallita', err);
+                return null;
+            }
+        }
+
+        function collectHiResIdsFromJson(json, into) {
+            const ids = into || new Set();
+            const walk = (objs) => {
+                (objs || []).forEach(o => {
+                    if (o && o.hiResId) ids.add(o.hiResId);
+                    if (o && o.objects) walk(o.objects);
+                });
+            };
+            walk(json && json.objects);
+            return ids;
+        }
+
+        function collectAllKnownHiResIds() {
+            const ids = new Set();
+            canvas.getObjects().forEach(o => {
+                if (o.hiResId) ids.add(o.hiResId);
+            });
+            historyStack.forEach(state => collectHiResIdsFromJson(state.json, ids));
+            return ids;
+        }
+
+        async function pruneHiResStore() {
+            try {
+                const keep = collectAllKnownHiResIds();
+                const db = await openHiResDb();
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(HIRES_STORE, 'readwrite');
+                    const store = tx.objectStore(HIRES_STORE);
+                    const req = store.getAllKeys();
+                    req.onsuccess = () => {
+                        (req.result || []).forEach(key => {
+                            if (!keep.has(key)) store.delete(key);
+                        });
+                    };
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch (err) {
+                // private mode / IDB pieno: l'anteprima resta comunque usabile
+            }
+        }
+
+        async function importHiResMap(map) {
+            if (!map || typeof map !== 'object') return;
+            for (const [id, dataURL] of Object.entries(map)) {
+                if (!id || !dataURL) continue;
+                try {
+                    await putHiResBlob(id, dataURLToBlob(dataURL));
+                } catch (err) {
+                    console.warn('Import hi-res fallito', id, err);
+                }
+            }
+        }
+
+        async function collectHiResDataUrls() {
+            const map = {};
+            const ids = new Set();
+            canvas.getObjects().forEach(o => { if (o.hiResId) ids.add(o.hiResId); });
+            for (const id of ids) {
+                const blob = await getHiResBlob(id);
+                if (blob) map[id] = await blobToDataURL(blob);
+            }
+            return map;
+        }
+
+        /** Su mobile: proxy leggero in canvas + originale in IndexedDB per l'export. */
+        async function prepareImageForCanvas(file) {
+            const source = await loadImageFromFile(file);
+            const srcW = source.naturalWidth || source.width;
+            const srcH = source.naturalHeight || source.height;
+            const shortSide = Math.min(srcW, srcH) || 1;
+            const mobile = isMobileUI();
+
+            if (!mobile) {
+                if (shortSide <= MAX_IMAGE_SHORT_SIDE) {
+                    return {
+                        dataURL: await blobToDataURL(file),
+                        hiResId: null,
+                        proxyNaturalWidth: srcW,
+                        proxyNaturalHeight: srcH
+                    };
+                }
+                const display = rasterizeImageElement(source, MAX_IMAGE_SHORT_SIDE, 0.92);
+                return {
+                    dataURL: display.dataURL,
+                    hiResId: null,
+                    proxyNaturalWidth: display.width,
+                    proxyNaturalHeight: display.height
+                };
+            }
+
+            if (shortSide <= PROXY_SHORT_SIDE) {
+                return {
+                    dataURL: await blobToDataURL(file),
+                    hiResId: null,
+                    proxyNaturalWidth: srcW,
+                    proxyNaturalHeight: srcH
+                };
+            }
+
+            const display = rasterizeImageElement(source, PROXY_SHORT_SIDE, 0.82);
+
+            const hi = rasterizeImageElement(source, HIRES_SHORT_SIDE, 0.92);
+            const hiResId = newHiResId();
+            try {
+                await putHiResBlob(hiResId, dataURLToBlob(hi.dataURL));
+                return {
+                    dataURL: display.dataURL,
+                    hiResId,
+                    proxyNaturalWidth: display.width,
+                    proxyNaturalHeight: display.height
+                };
+            } catch (err) {
+                console.warn('IndexedDB hi-res non disponibile, uso qualità export in canvas', err);
+                return {
+                    dataURL: hi.dataURL,
+                    hiResId: null,
+                    proxyNaturalWidth: hi.width,
+                    proxyNaturalHeight: hi.height
+                };
+            }
+        }
+
+        async function withHighResSources(fn) {
+            const backups = [];
+            const images = canvas.getObjects().filter(o => o.type === 'image' && o.hiResId);
+            try {
+                for (const img of images) {
+                    const blob = await getHiResBlob(img.hiResId);
+                    if (!blob) continue;
+                    const objectUrl = URL.createObjectURL(blob);
+                    const hiEl = await loadHtmlImage(objectUrl);
+                    const proxyW = img.proxyNaturalWidth || (img._originalElement && img._originalElement.naturalWidth) || img.width;
+                    const proxyH = img.proxyNaturalHeight || (img._originalElement && img._originalElement.naturalHeight) || img.height;
+                    const rx = (hiEl.naturalWidth || hiEl.width) / proxyW;
+                    const ry = (hiEl.naturalHeight || hiEl.height) / proxyH;
+                    if (!isFinite(rx) || !isFinite(ry) || rx <= 0 || ry <= 0) {
+                        URL.revokeObjectURL(objectUrl);
+                        continue;
+                    }
+                    const backup = {
+                        img,
+                        element: img._element,
+                        originalElement: img._originalElement,
+                        cropX: img.cropX || 0,
+                        cropY: img.cropY || 0,
+                        width: img.width,
+                        height: img.height,
+                        scaleX: img.scaleX,
+                        scaleY: img.scaleY,
+                        left: img.left,
+                        top: img.top,
+                        objectUrl
+                    };
+                    backups.push(backup);
+                    img.setElement(hiEl);
+                    img.set({
+                        left: backup.left,
+                        top: backup.top,
+                        cropX: backup.cropX * rx,
+                        cropY: backup.cropY * ry,
+                        width: backup.width * rx,
+                        height: backup.height * ry,
+                        scaleX: backup.scaleX / rx,
+                        scaleY: backup.scaleY / ry
+                    });
+                    img.dirty = true;
+                    img.setCoords();
+                }
+                canvas.renderAll();
+                await fn();
+            } finally {
+                backups.forEach(backup => {
+                    try {
+                        backup.img.setElement(backup.originalElement || backup.element);
+                        backup.img.set({
+                            left: backup.left,
+                            top: backup.top,
+                            cropX: backup.cropX,
+                            cropY: backup.cropY,
+                            width: backup.width,
+                            height: backup.height,
+                            scaleX: backup.scaleX,
+                            scaleY: backup.scaleY
+                        });
+                        backup.img.dirty = true;
+                        backup.img.setCoords();
+                    } catch (err) {
+                        console.warn('Ripristino proxy fallito', err);
+                    }
+                    URL.revokeObjectURL(backup.objectUrl);
+                });
+                canvas.renderAll();
+            }
+        }
+
         function deleteSelected() {
-            if (isCropping || pageDrag.active) return;
+            if (isCropping || pageDrag.active || pageEditorMode) return;
             const activeObjects = canvas.getActiveObjects();
             if (activeObjects.length) {
                 canvas.discardActiveObject();
@@ -1852,6 +2300,10 @@
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.key === 'Escape') {
                 if (pinchGesture.active) endPinchGesture(false);
+                if (pageEditorMode) {
+                    setPageEditorMode(false);
+                    return;
+                }
                 cancelPageDrag();
             }
             if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
@@ -1861,24 +2313,40 @@
             if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeLayer('down'); }
         });
 
-        function exportCarousel() {
-            guideLines.forEach(line => line.set('opacity', 0));
-            canvas.discardActiveObject();
-            canvas.renderAll();
-            for (let i = 0; i < squareCount; i++) {
-                const dataURL = canvas.toDataURL({
-                    format: 'jpeg', quality: 1,
-                    left: i * pageW, top: 0, width: pageW, height: pageH
+        async function exportCarousel() {
+            if (isExporting || isCropping || pageDrag.active) return;
+            isExporting = true;
+            const hint = document.getElementById('hint-toast');
+            if (hint && !pageEditorMode) hint.textContent = 'Esportazione in alta risoluzione…';
+            try {
+                await withHighResSources(async () => {
+                    guideLines.forEach(line => line.set('opacity', 0));
+                    canvas.discardActiveObject();
+                    canvas.renderAll();
+                    for (let i = 0; i < squareCount; i++) {
+                        const dataURL = canvas.toDataURL({
+                            format: 'jpeg', quality: 1,
+                            left: i * pageW, top: 0, width: pageW, height: pageH,
+                            enableRetinaScaling: false
+                        });
+                        const link = document.createElement('a');
+                        link.download = `carousel-slide-${i + 1}.jpg`;
+                        link.href = dataURL;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        await new Promise(r => setTimeout(r, 180));
+                    }
+                    guideLines.forEach(line => line.set('opacity', 1));
+                    canvas.renderAll();
                 });
-                const link = document.createElement('a');
-                link.download = `carousel-slide-${i + 1}.jpg`;
-                link.href = dataURL;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+            } catch (err) {
+                console.warn('Export fallito', err);
+                alert('Esportazione non riuscita.');
+            } finally {
+                isExporting = false;
+                updateMobileHint();
             }
-            guideLines.forEach(line => line.set('opacity', 1));
-            canvas.renderAll();
         }
 
         // --- PERSISTENZA & PROGETTO ---
@@ -1921,7 +2389,7 @@
                     cancelPageDrag();
                     if (typeof endPinchGesture === 'function') endPinchGesture(false);
 
-                    canvas.loadFromJSON(payload.json, function() {
+                    canvas.loadFromJSON(payload.json, async function() {
                         try {
                             squareCount = payload.squareCount || 1;
                             aspectRatio = resolveAspectKey(payload.aspectRatio || '1:1');
@@ -1933,6 +2401,10 @@
                                 canvas.backgroundColor = payload.backgroundColor;
                                 document.getElementById('bg-color').value = payload.backgroundColor;
                                 document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
+                            }
+
+                            if (payload.hiRes) {
+                                await importHiResMap(payload.hiRes);
                             }
 
                             syncCanvasSize();
@@ -1964,6 +2436,7 @@
             } catch (err) {
                 console.warn('Autosave non disponibile (quota o private mode)', err);
             }
+            pruneHiResStore();
         }
 
         async function restoreProject() {
@@ -1982,10 +2455,11 @@
             }
         }
 
-        function saveProjectFile() {
+        async function saveProjectFile() {
             if (isCropping || pageDrag.active) return;
             try {
                 const payload = buildProjectPayload();
+                payload.hiRes = await collectHiResDataUrls();
                 const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
