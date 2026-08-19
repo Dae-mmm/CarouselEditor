@@ -45,6 +45,7 @@
             background-position: 0 0, 9px 9px;
             -webkit-overflow-scrolling: touch;
             touch-action: pan-x pan-y;
+            overscroll-behavior: contain;
         }
 
         #workspace::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -60,6 +61,11 @@
 
         #canvas-wrapper {
             transform-origin: top left;
+            touch-action: none;
+        }
+        #canvas-wrapper .canvas-container,
+        #canvas-wrapper canvas {
+            touch-action: none;
         }
 
         #overlay-layer {
@@ -239,6 +245,13 @@
         }
         body.view-panning #workspace {
             touch-action: none;
+        }
+        body.object-dragging {
+            user-select: none;
+        }
+        body.object-dragging #workspace {
+            touch-action: none;
+            overscroll-behavior: none;
         }
 
         #rule-grid {
@@ -555,6 +568,26 @@
             startScrollTop: 0
         };
 
+        const scrollLock = {
+            active: false,
+            left: 0,
+            top: 0
+        };
+
+        function beginScrollLock() {
+            const ws = document.getElementById('workspace');
+            scrollLock.active = true;
+            scrollLock.left = ws.scrollLeft;
+            scrollLock.top = ws.scrollTop;
+            document.body.classList.add('object-dragging');
+        }
+
+        function endScrollLock() {
+            if (!scrollLock.active) return;
+            scrollLock.active = false;
+            document.body.classList.remove('object-dragging');
+        }
+
         let showRuleGrid = false;
 
         // Pinch + rotate multitouch (mobile)
@@ -703,7 +736,7 @@
             preserveObjectStacking: true,
             uniformScaling: false,
             uniScaleKey: 'shiftKey',
-            allowTouchScrolling: true,
+            allowTouchScrolling: false,
             selection: true,
             enableRetinaScaling: false,
             renderOnAddRemove: true,
@@ -1490,6 +1523,12 @@
         }
 
         document.getElementById('workspace').addEventListener('scroll', () => {
+            const workspace = document.getElementById('workspace');
+            if (scrollLock.active) {
+                workspace.scrollLeft = scrollLock.left;
+                workspace.scrollTop = scrollLock.top;
+                return;
+            }
             canvas.calcOffset();
             if (!pageDrag.active) updateVisiblePageFromScroll();
         }, { passive: true });
@@ -1730,7 +1769,10 @@
                 return;
             }
 
-            if (!isBackgroundTarget(opt.target)) return;
+            if (!isBackgroundTarget(opt.target)) {
+                beginScrollLock();
+                return;
+            }
 
             pageDrag.startClientX = pt.x;
             pageDrag.startClientY = pt.y;
@@ -1795,6 +1837,7 @@
         });
 
         function onPointerUp() {
+            endScrollLock();
             if (viewPan.active || viewPan.pending) {
                 endViewPan();
             }
@@ -1852,6 +1895,7 @@
 
             pinchGesture.active = true;
             pinchGesture.obj = obj;
+            beginScrollLock();
             pinchGesture.startDist = Math.max(1, touchDistance(t1, t2));
             pinchGesture.startAngle = touchAngleDeg(t1, t2);
             pinchGesture.baseScaleX = obj.scaleX || 1;
@@ -1903,6 +1947,7 @@
             const obj = pinchGesture.obj;
             pinchGesture.active = false;
             pinchGesture.obj = null;
+            endScrollLock();
             if (commit && obj) {
                 obj.setCoords();
                 // object:modified → saveState automatico
@@ -1932,9 +1977,8 @@
                 updatePinchGesture(e.touches[0], e.touches[1]);
                 return;
             }
-            if (pageDrag.armed || pageDrag.active || viewPan.active || viewPan.pending) {
-                e.preventDefault();
-            }
+            // Sempre: il drag di una foto non deve scrollare lo workspace
+            e.preventDefault();
         }, { passive: false, capture: true });
 
         upperCanvas.addEventListener('touchend', (e) => {
@@ -1950,6 +1994,7 @@
 
         upperCanvas.addEventListener('touchcancel', () => {
             if (pinchGesture.active) endPinchGesture(false);
+            endScrollLock();
             cancelPageDrag();
         }, { capture: true });
 
