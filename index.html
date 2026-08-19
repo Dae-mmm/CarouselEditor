@@ -60,7 +60,18 @@
 
         #canvas-wrapper {
             transform-origin: top left;
-            will-change: transform;
+        }
+
+        #overlay-layer {
+            position: absolute;
+            left: 0;
+            top: 0;
+            transform-origin: top left;
+            pointer-events: none;
+            z-index: 20;
+        }
+        #overlay-layer .overlay-hit {
+            pointer-events: auto;
         }
 
         .tool-btn { position: relative; }
@@ -396,17 +407,18 @@
         <div id="canvas-stage" class="relative">
             <div id="canvas-wrapper" class="relative shadow-2xl bg-white" style="width: 1080px; height: 1080px;">
                 <canvas id="canvas"></canvas>
+                <div id="overlay-layer">
                 <div id="rule-grid"></div>
                 <div id="page-editor-frames"></div>
                 <div id="page-drag-dim"></div>
                 <div id="page-insert-line"></div>
 
-                <button onclick="addSquare()" title="Aggiungi pagina" class="absolute top-1/2 -right-14 -translate-y-1/2 w-11 h-11 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-2xl text-indigo-600 active:scale-95 z-10">
+                <button onclick="addSquare()" title="Aggiungi pagina" class="overlay-hit absolute top-1/2 -right-14 -translate-y-1/2 w-11 h-11 bg-white rounded-full shadow-xl border border-gray-100 flex items-center justify-center text-2xl text-indigo-600 active:scale-95 z-10">
                     +
                     <span id="square-badge" class="absolute -top-1 -right-1 bg-indigo-600 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">1</span>
                 </button>
 
-                <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
+                <div id="floating-toolbar" class="overlay-hit absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
                     <div id="normal-tools" class="flex gap-1 items-center">
                         <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg">✂️</button>
                         <div class="w-px h-6 bg-gray-300 mx-1"></div>
@@ -419,6 +431,7 @@
                         <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm">✓</button>
                         <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm">✗</button>
                     </div>
+                </div>
                 </div>
             </div>
         </div>
@@ -691,8 +704,12 @@
             uniformScaling: false,
             uniScaleKey: 'shiftKey',
             allowTouchScrolling: true,
-            selection: true
+            selection: true,
+            enableRetinaScaling: false,
+            renderOnAddRemove: true,
+            skipOffscreen: true
         });
+        canvas.imageSmoothingEnabled = true;
 
         /** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
         function configureObjectControls(obj) {
@@ -781,10 +798,6 @@
             canvas.loadFromJSON(state.json, function() {
                 squareCount = state.squareCount;
                 document.getElementById('square-badge').innerText = squareCount;
-                canvas.setWidth(pageW * squareCount);
-                canvas.setHeight(pageH);
-                document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
-                document.getElementById('canvas-wrapper').style.height = pageH + 'px';
                 guideLines = canvas.getObjects().filter(o => o.isGuideLine);
                 canvas.renderAll();
                 isHistoryAction = false;
@@ -812,7 +825,8 @@
         let currentSnapLines = [];
         let pendingSnapMove = null;
         let pendingSnapScale = null;
-        const SNAP_DISTANCE = 10;
+        const SNAP_DISTANCE = 12;
+        const PAGE_SNAP_DISTANCE = 16;
 
         function clearGuidelines() {
             if (currentSnapLines.length > 0 || pendingSnapMove || pendingSnapScale) {
@@ -823,10 +837,26 @@
             }
         }
 
+        function getPageEdgeTargets(obj) {
+            const page = getObjectPageIndex(obj);
+            const pages = [page];
+            if (page > 0) pages.push(page - 1);
+            if (page < squareCount - 1) pages.push(page + 1);
+            return pages.map(p => ({
+                left: p * pageW,
+                centerX: p * pageW + pageW / 2,
+                right: (p + 1) * pageW,
+                top: 0,
+                centerY: pageH / 2,
+                bottom: pageH,
+                isPage: true
+            }));
+        }
+
         function handleSnapping(e) {
-            if (pageDrag.active || pageDrag.armed || viewPan.active) return;
+            if (pageDrag.active || pageDrag.armed || viewPan.active || pageEditorMode) return;
             const obj = e.target;
-            if (!obj || obj.isCropping) return;
+            if (!obj || obj.isCropping || obj.isCropRect) return;
             if (e.e && e.e.altKey) { clearGuidelines(); return; }
 
             const action = e.transform ? e.transform.action : '';
@@ -834,37 +864,46 @@
             const isScaling = action.includes('scale');
             if (!isMoving && !isScaling) { clearGuidelines(); return; }
 
-            const objBounds = obj.getBoundingRect();
+            const pageThreshBase = Math.max(PAGE_SNAP_DISTANCE, 16 / currentZoom);
+            const objThreshBase = Math.max(SNAP_DISTANCE, 12 / currentZoom);
+
+            const objBounds = obj.getBoundingRect(true);
             const objCenter = obj.getCenterPoint();
-            const targets = [];
+            const page = getObjectPageIndex(obj);
+            const targets = getPageEdgeTargets(obj);
             canvas.getObjects().forEach(t => {
                 if (t === obj || t.isGuideLine || t.isCropRect || t.isAlignmentLine) return;
-                const bounds = t.getBoundingRect();
+                const tPage = getObjectPageIndex(t);
+                if (Math.abs(tPage - page) > 1) return;
+                const bounds = t.getBoundingRect(true);
                 const center = t.getCenterPoint();
                 targets.push({
                     left: bounds.left, centerX: center.x, right: bounds.left + bounds.width,
                     top: bounds.top, centerY: center.y, bottom: bounds.top + bounds.height
                 });
             });
-            if (!targets.length) return;
 
             let linesToDraw = [];
 
             if (isMoving) {
                 let snapX = null, snapY = null;
-                let diffX = SNAP_DISTANCE + 1, diffY = SNAP_DISTANCE + 1;
+                let diffX = pageThreshBase + 1, diffY = pageThreshBase + 1;
                 let finalLeft = obj.left, finalTop = obj.top;
 
                 targets.forEach(t => {
+                    const thresh = t.isPage ? pageThreshBase : objThreshBase;
+                    const xEdges = t.isPage ? [t.left, t.right] : [t.left, t.centerX, t.right];
+                    const yEdges = t.isPage ? [t.top, t.bottom] : [t.top, t.centerY, t.bottom];
                     const objXs = [
                         { val: objBounds.left, type: 'left' },
                         { val: objCenter.x, type: 'center' },
                         { val: objBounds.left + objBounds.width, type: 'right' }
                     ];
-                    [t.left, t.centerX, t.right].forEach(tx => {
+                    xEdges.forEach(tx => {
                         objXs.forEach(ox => {
-                            if (Math.abs(ox.val - tx) < diffX) {
-                                diffX = Math.abs(ox.val - tx);
+                            const d = Math.abs(ox.val - tx);
+                            if (d < thresh && d < diffX) {
+                                diffX = d;
                                 snapX = tx;
                                 if (ox.type === 'left') finalLeft = obj.left + (tx - objBounds.left);
                                 if (ox.type === 'center') finalLeft = obj.left + (tx - objCenter.x);
@@ -877,10 +916,11 @@
                         { val: objCenter.y, type: 'center' },
                         { val: objBounds.top + objBounds.height, type: 'bottom' }
                     ];
-                    [t.top, t.centerY, t.bottom].forEach(ty => {
+                    yEdges.forEach(ty => {
                         objYs.forEach(oy => {
-                            if (Math.abs(oy.val - ty) < diffY) {
-                                diffY = Math.abs(oy.val - ty);
+                            const d = Math.abs(oy.val - ty);
+                            if (d < thresh && d < diffY) {
+                                diffY = d;
                                 snapY = ty;
                                 if (oy.type === 'top') finalTop = obj.top + (ty - objBounds.top);
                                 if (oy.type === 'center') finalTop = obj.top + (ty - objCenter.y);
@@ -890,27 +930,28 @@
                     });
                 });
 
-                if (snapX !== null) linesToDraw.push([snapX, -10000, snapX, 10000]);
-                if (snapY !== null) linesToDraw.push([-10000, snapY, 10000, snapY]);
+                if (snapX !== null) linesToDraw.push([snapX, 0, snapX, pageH]);
+                if (snapY !== null) linesToDraw.push([page * pageW, snapY, (page + 1) * pageW, snapY]);
                 pendingSnapMove = (snapX !== null || snapY !== null) ? { left: finalLeft, top: finalTop } : null;
             }
 
             if (isScaling) {
-                let activeCorner = e.transform.corner;
+                let activeCorner = e.transform.corner || '';
                 let scaleSnapX = null, scaleSnapY = null;
-                let sDiffX = SNAP_DISTANCE + 1, sDiffY = SNAP_DISTANCE + 1;
+                let sDiffX = pageThreshBase + 1, sDiffY = pageThreshBase + 1;
 
                 targets.forEach(t => {
-                    const targetXs = [t.left, t.centerX, t.right];
-                    const targetYs = [t.top, t.centerY, t.bottom];
-                    if (activeCorner.includes('l')) targetXs.forEach(tx => { if (Math.abs(objBounds.left - tx) < sDiffX) { sDiffX = Math.abs(objBounds.left - tx); scaleSnapX = tx; } });
-                    else if (activeCorner.includes('r')) targetXs.forEach(tx => { if (Math.abs((objBounds.left + objBounds.width) - tx) < sDiffX) { sDiffX = Math.abs((objBounds.left + objBounds.width) - tx); scaleSnapX = tx; } });
-                    if (activeCorner.includes('t')) targetYs.forEach(ty => { if (Math.abs(objBounds.top - ty) < sDiffY) { sDiffY = Math.abs(objBounds.top - ty); scaleSnapY = ty; } });
-                    else if (activeCorner.includes('b')) targetYs.forEach(ty => { if (Math.abs((objBounds.top + objBounds.height) - ty) < sDiffY) { sDiffY = Math.abs((objBounds.top + objBounds.height) - ty); scaleSnapY = ty; } });
+                    const thresh = t.isPage ? pageThreshBase : objThreshBase;
+                    const targetXs = t.isPage ? [t.left, t.right] : [t.left, t.centerX, t.right];
+                    const targetYs = t.isPage ? [t.top, t.bottom] : [t.top, t.centerY, t.bottom];
+                    if (activeCorner.includes('l')) targetXs.forEach(tx => { const d = Math.abs(objBounds.left - tx); if (d < thresh && d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+                    else if (activeCorner.includes('r')) targetXs.forEach(tx => { const d = Math.abs((objBounds.left + objBounds.width) - tx); if (d < thresh && d < sDiffX) { sDiffX = d; scaleSnapX = tx; } });
+                    if (activeCorner.includes('t')) targetYs.forEach(ty => { const d = Math.abs(objBounds.top - ty); if (d < thresh && d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
+                    else if (activeCorner.includes('b')) targetYs.forEach(ty => { const d = Math.abs((objBounds.top + objBounds.height) - ty); if (d < thresh && d < sDiffY) { sDiffY = d; scaleSnapY = ty; } });
                 });
 
-                if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, -10000, scaleSnapX, 10000]);
-                if (scaleSnapY !== null) linesToDraw.push([-10000, scaleSnapY, 10000, scaleSnapY]);
+                if (scaleSnapX !== null) linesToDraw.push([scaleSnapX, 0, scaleSnapX, pageH]);
+                if (scaleSnapY !== null) linesToDraw.push([page * pageW, scaleSnapY, (page + 1) * pageW, scaleSnapY]);
 
                 let finalScaleX = obj.scaleX, finalScaleY = obj.scaleY, willSnapScale = false;
                 if (!(e.e && e.e.shiftKey)) {
@@ -996,11 +1037,25 @@
         // --- ZOOM & CENTER ---
         function applyZoom() {
             const wrapper = document.getElementById('canvas-wrapper');
-            wrapper.style.transform = `scale(${currentZoom})`;
+            const overlay = document.getElementById('overlay-layer');
+            const dispW = Math.max(1, pageW * squareCount * currentZoom);
+            const dispH = Math.max(1, pageH * currentZoom);
+            wrapper.style.transform = 'none';
+            wrapper.style.width = dispW + 'px';
+            wrapper.style.height = dispH + 'px';
+            wrapper.style.marginRight = '0px';
+            wrapper.style.marginBottom = '0px';
+            if (overlay) {
+                overlay.style.width = (pageW * squareCount) + 'px';
+                overlay.style.height = pageH + 'px';
+                overlay.style.transform = `scale(${currentZoom})`;
+            }
+            canvas.setDimensions({ width: dispW, height: dispH });
+            canvas.setZoom(currentZoom);
+            canvas.calcOffset();
             document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
-            wrapper.style.width = (pageW * squareCount) + 'px';
-            wrapper.style.height = pageH + 'px';
             centerStagePadding();
+            canvas.requestRenderAll();
         }
 
         function centerStagePadding() {
@@ -1017,11 +1072,6 @@
             stage.style.paddingBottom = padY + 'px';
             stage.style.width = (totalW + padX * 2) + 'px';
             stage.style.minHeight = (scaledH + padY * 2) + 'px';
-            const wrapper = document.getElementById('canvas-wrapper');
-            const layoutW = pageW * squareCount;
-            const layoutH = pageH;
-            wrapper.style.marginRight = (totalW - layoutW) + 'px';
-            wrapper.style.marginBottom = (scaledH - layoutH) + 'px';
         }
 
         function fitToScreen() {
@@ -1058,6 +1108,7 @@
 
         window.addEventListener('resize', () => {
             centerStagePadding();
+            canvas.calcOffset();
             updateMobileHint();
             applyInteractionMode();
             configureAllObjectControls();
@@ -1072,7 +1123,7 @@
                 return;
             }
             toolbar.style.display = 'flex';
-            const boundingRect = activeObj.getBoundingRect();
+            const boundingRect = activeObj.getBoundingRect(true);
             toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
             toolbar.style.top = boundingRect.top + 'px';
         }
@@ -1230,10 +1281,6 @@
 
         function syncCanvasSize() {
             document.getElementById('square-badge').innerText = squareCount;
-            canvas.setWidth(pageW * squareCount);
-            canvas.setHeight(pageH);
-            document.getElementById('canvas-wrapper').style.width = (pageW * squareCount) + 'px';
-            document.getElementById('canvas-wrapper').style.height = pageH + 'px';
             rebuildGuideLines();
             applyZoom();
             renderPagesUI();
@@ -1443,6 +1490,7 @@
         }
 
         document.getElementById('workspace').addEventListener('scroll', () => {
+            canvas.calcOffset();
             if (!pageDrag.active) updateVisiblePageFromScroll();
         }, { passive: true });
 
@@ -1524,10 +1572,10 @@
 
             const dataURL = canvas.toDataURL({
                 format: 'png',
-                left: pageIndex * pageW,
+                left: pageIndex * pageW * currentZoom,
                 top: 0,
-                width: pageW,
-                height: pageH,
+                width: pageW * currentZoom,
+                height: pageH * currentZoom,
                 enableRetinaScaling: false
             });
 
@@ -2313,6 +2361,17 @@
             if ((e.ctrlKey || e.metaKey) && e.key === '-') { e.preventDefault(); changeLayer('down'); }
         });
 
+        async function withNativeCanvasResolution(fn) {
+            canvas.setZoom(1);
+            canvas.setDimensions({ width: pageW * squareCount, height: pageH });
+            canvas.renderAll();
+            try {
+                return await fn();
+            } finally {
+                applyZoom();
+            }
+        }
+
         async function exportCarousel() {
             if (isExporting || isCropping || pageDrag.active) return;
             isExporting = true;
@@ -2320,25 +2379,27 @@
             if (hint && !pageEditorMode) hint.textContent = 'Esportazione in alta risoluzione…';
             try {
                 await withHighResSources(async () => {
-                    guideLines.forEach(line => line.set('opacity', 0));
-                    canvas.discardActiveObject();
-                    canvas.renderAll();
-                    for (let i = 0; i < squareCount; i++) {
-                        const dataURL = canvas.toDataURL({
-                            format: 'jpeg', quality: 1,
-                            left: i * pageW, top: 0, width: pageW, height: pageH,
-                            enableRetinaScaling: false
-                        });
-                        const link = document.createElement('a');
-                        link.download = `carousel-slide-${i + 1}.jpg`;
-                        link.href = dataURL;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        await new Promise(r => setTimeout(r, 180));
-                    }
-                    guideLines.forEach(line => line.set('opacity', 1));
-                    canvas.renderAll();
+                    await withNativeCanvasResolution(async () => {
+                        guideLines.forEach(line => line.set('opacity', 0));
+                        canvas.discardActiveObject();
+                        canvas.renderAll();
+                        for (let i = 0; i < squareCount; i++) {
+                            const dataURL = canvas.toDataURL({
+                                format: 'jpeg', quality: 1,
+                                left: i * pageW, top: 0, width: pageW, height: pageH,
+                                enableRetinaScaling: false
+                            });
+                            const link = document.createElement('a');
+                            link.download = `carousel-slide-${i + 1}.jpg`;
+                            link.href = dataURL;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            await new Promise(r => setTimeout(r, 180));
+                        }
+                        guideLines.forEach(line => line.set('opacity', 1));
+                        canvas.renderAll();
+                    });
                 });
             } catch (err) {
                 console.warn('Export fallito', err);
