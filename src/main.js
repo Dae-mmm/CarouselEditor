@@ -287,9 +287,33 @@ const canvas = new fabric.Canvas('canvas', {
 });
 canvas.imageSmoothingEnabled = true;
 
-/** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
+/** Su mobile: niente maniglie scale/rotate sulle foto (si usa multitouch).
+ *  Il rettangolo di crop deve invece avere maniglie grandi e visibili. */
 function configureObjectControls(obj) {
     if (!obj || obj.isGuideLine || obj.isAlignmentLine) return;
+
+    if (obj.isCropRect) {
+        const mobile = isMobileUI();
+        obj.setControlsVisibility({
+            tl: true, tr: true, bl: true, br: true,
+            ml: true, mt: true, mr: true, mb: true,
+            mtr: false,
+            tlRotate: false, trRotate: false, blRotate: false, brRotate: false
+        });
+        obj.set({
+            hasBorders: true,
+            lockRotation: true,
+            cornerStyle: 'circle',
+            transparentCorners: false,
+            cornerColor: '#ef4444',
+            borderColor: '#ef4444',
+            cornerStrokeColor: '#ffffff',
+            cornerSize: mobile ? 44 : 16,
+            touchCornerSize: mobile ? 88 : 28,
+            padding: mobile ? 14 : 0
+        });
+        return;
+    }
 
     if (isMobileUI()) {
         obj.setControlsVisibility({
@@ -299,16 +323,6 @@ function configureObjectControls(obj) {
             tlRotate: false, trRotate: false, blRotate: false, brRotate: false
         });
         obj.hasBorders = true;
-        return;
-    }
-
-    if (obj.isCropRect) {
-        obj.setControlsVisibility({
-            tl: true, tr: true, bl: true, br: true,
-            ml: true, mt: true, mr: true, mb: true,
-            mtr: false,
-            tlRotate: false, trRotate: false, blRotate: false, brRotate: false
-        });
         return;
     }
 
@@ -724,9 +738,16 @@ function updateToolbarPosition() {
         return;
     }
     toolbar.style.display = 'flex';
-    const boundingRect = activeObj.getBoundingRect(true);
-    toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
-    toolbar.style.top = boundingRect.top + 'px';
+    const boundingRect = activeObj.getBoundingRect(false);
+    if (isMobileUI()) {
+        toolbar.style.left = (boundingRect.left + boundingRect.width / 2) + 'px';
+        toolbar.style.top = boundingRect.top + 'px';
+        toolbar.style.transform = 'translate(-50%, calc(-100% - 10px))';
+    } else {
+        toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
+        toolbar.style.top = boundingRect.top + 'px';
+        toolbar.style.transform = 'translate(-100%, calc(-100% - 12px))';
+    }
 }
 
 function onSelectionControls(e) {
@@ -781,31 +802,39 @@ function startCrop() {
         canvas.renderAll();
     }
     isCropping = true;
+    const mobile = isMobileUI();
     cropRect = new fabric.Rect({
         left: imgToCrop.left,
         top: imgToCrop.top,
         width: imgToCrop.getScaledWidth(),
         height: imgToCrop.getScaledHeight(),
-        fill: 'rgba(0, 0, 0, 0.4)',
+        fill: 'rgba(0, 0, 0, 0.35)',
         stroke: '#ef4444',
-        strokeWidth: 2,
-        strokeDashArray: [5, 5],
+        strokeWidth: mobile ? Math.max(6, 8 / currentZoom) : 2,
+        strokeDashArray: mobile ? [12, 8] : [5, 5],
         cornerColor: '#ef4444',
         borderColor: '#ef4444',
-        cornerSize: 12,
+        cornerStrokeColor: '#ffffff',
+        cornerSize: mobile ? 44 : 16,
+        touchCornerSize: mobile ? 88 : 28,
+        padding: mobile ? 14 : 0,
         transparentCorners: false,
         hasRotatingPoint: false,
         lockRotation: true,
+        lockScalingFlip: true,
         isCropRect: true
     });
-    cropRect.setControlsVisibility({ tlRotate: false, trRotate: false, blRotate: false, brRotate: false });
+    configureObjectControls(cropRect);
     canvas.add(cropRect);
     canvas.setActiveObject(cropRect);
+    configureObjectControls(cropRect);
+    cropRect.setCoords();
     imgToCrop.selectable = false;
     imgToCrop.evented = false;
     document.getElementById('normal-tools').classList.add('hidden');
     document.getElementById('crop-tools').classList.remove('hidden');
     updateToolbarPosition();
+    canvas.requestRenderAll();
 }
 
 function applyCrop() {
