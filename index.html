@@ -41,6 +41,7 @@
                 <span id="user-email" class="text-[10px] text-gray-500 max-w-[120px] truncate"></span>
                 <button type="button" onclick="openProjectsModal()" class="text-[11px] font-semibold text-gray-700 px-2.5 py-1 rounded-full bg-gray-100">Cloud</button>
                 <button type="button" id="btn-cloud-save" onclick="saveCurrentProject()" class="text-[11px] font-semibold text-white px-2.5 py-1 rounded-full bg-emerald-500">Salva cloud</button>
+                <button type="button" id="btn-admin-library" data-admin-only class="hidden text-[11px] font-semibold text-white px-2.5 py-1 rounded-full bg-violet-600" onclick="openLibraryModal({ admin: true })">Asset admin</button>
                 <button type="button" onclick="logout()" class="text-[11px] font-semibold text-gray-500 px-2 py-1 rounded-full">Esci</button>
             </div>
         </div>
@@ -138,6 +139,7 @@
 
             <input type="file" id="image-upload" accept="image/*" class="hidden" multiple>
             <button onclick="document.getElementById('image-upload').click()" class="dock-btn" title="Carica"><span class="ico">🖼️</span>Foto</button>
+            <button type="button" onclick="openLibraryModal()" class="dock-btn" title="Libreria grafica"><span class="ico">🎨</span>Grafica</button>
 
             <button onclick="addSquare()" class="dock-btn text-indigo-600" title="Aggiungi pagina"><span class="ico">➕</span>Pagina</button>
 
@@ -219,6 +221,40 @@
             </div>
             <div id="projects-list" class="flex-1 overflow-y-auto px-4 py-3 space-y-2 min-h-[180px]">
                 <p class="text-sm text-gray-400 text-center py-8">Caricamento…</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal libreria grafica -->
+    <div id="library-modal" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop p-4">
+        <div class="modal-panel bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-gray-100 max-h-[85vh] flex flex-col">
+            <div class="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
+                <div>
+                    <h2 class="text-lg font-bold text-gray-800">Libreria grafica</h2>
+                    <p class="text-xs text-gray-500 mt-0.5">Divisori, cornici e PNG da inserire nel carousel</p>
+                </div>
+                <button type="button" onclick="closeLibraryModal()" class="w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 flex items-center justify-center text-xl leading-none">&times;</button>
+            </div>
+
+            <div id="library-admin" data-admin-only class="hidden px-5 py-3 border-b border-violet-100 bg-violet-50">
+                <p class="text-xs font-semibold text-violet-800 mb-2">Carica PNG (solo admin)</p>
+                <div class="flex flex-wrap gap-2 items-center">
+                    <select id="library-upload-category" class="border border-violet-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-400">
+                        <option value="divisori">Divisori</option>
+                        <option value="cornici">Cornici</option>
+                        <option value="sticker">Sticker</option>
+                        <option value="forme">Forme</option>
+                        <option value="altro">Altro</option>
+                    </select>
+                    <button type="button" onclick="document.getElementById('library-upload').click()" class="bg-violet-600 text-white font-semibold text-sm px-4 py-2 rounded-full hover:opacity-90">Scegli file</button>
+                    <input type="file" id="library-upload" accept="image/png,image/webp,.png,.webp" class="hidden" multiple>
+                </div>
+                <p class="text-[11px] text-violet-700 mt-2">PNG o WebP, max 6 MB. Lo sfondo trasparente viene conservato.</p>
+            </div>
+
+            <div class="px-5 py-3 flex gap-1.5 overflow-x-auto no-scrollbar" id="library-cats" role="tablist" aria-label="Categorie"></div>
+            <div id="library-grid" class="flex-1 overflow-y-auto px-4 pb-4 grid grid-cols-3 sm:grid-cols-4 gap-2 min-h-[200px] content-start">
+                <p class="col-span-full text-sm text-gray-400 text-center py-8">Caricamento…</p>
             </div>
         </div>
     </div>

@@ -23,6 +23,10 @@ let currentProjectId = null;
 let currentProjectName = null;
 let authMode = 'login';
 let toastTimer = null;
+let isAdmin = false;
+let libraryAssets = [];
+let libraryCategory = 'all';
+let libraryLoaded = false;
 
 function requireSupabase() {
     if (!supabaseClient) {
@@ -1906,6 +1910,22 @@ async function withNativeCanvasResolution(fn) {
     }
 }
 
+function placeFabricImageOnCurrentPage(img, extra) {
+    const baseLeft = currentVisiblePage * pageW;
+    const maxDim = Math.max(img.width, img.height) || 1;
+    const fit = (Math.min(pageW, pageH) * 0.9) / maxDim;
+    if (fit < 1) img.scale(fit);
+    img.set({
+        left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
+        top: (pageH / 2) - (img.getScaledHeight() / 2),
+        ...(extra || {})
+    });
+    canvas.add(img);
+    canvas.setActiveObject(img);
+    configureObjectControls(img);
+    canvas.requestRenderAll();
+}
+
 document.getElementById('image-upload').addEventListener('change', async function(e) {
     const files = e.target.files;
     if (!files.length) return;
@@ -1914,7 +1934,6 @@ document.getElementById('image-upload').addEventListener('change', async functio
         return;
     }
     if (pageEditorMode) setPageEditorMode(false);
-    const baseLeft = currentVisiblePage * pageW;
     const fileList = Array.from(files);
     e.target.value = '';
     const hint = document.getElementById('hint-toast');
@@ -1930,21 +1949,11 @@ document.getElementById('image-upload').addEventListener('change', async functio
                             reject(new Error('Immagine non decodificata'));
                             return;
                         }
-                        const maxDim = Math.max(img.width, img.height) || 1;
-                        const fit = (Math.min(pageW, pageH) * 0.9) / maxDim;
-                        if (fit < 1) img.scale(fit);
-
-                        img.set({
-                            left: baseLeft + (pageW / 2) - (img.getScaledWidth() / 2),
-                            top: (pageH / 2) - (img.getScaledHeight() / 2),
+                        placeFabricImageOnCurrentPage(img, {
                             hiResId: prepared.hiResId || undefined,
                             proxyNaturalWidth: prepared.proxyNaturalWidth,
                             proxyNaturalHeight: prepared.proxyNaturalHeight
                         });
-                        canvas.add(img);
-                        canvas.setActiveObject(img);
-                        configureObjectControls(img);
-                        canvas.requestRenderAll();
                         resolve();
                     } catch (err) {
                         reject(err);
@@ -1975,9 +1984,18 @@ window.addEventListener('keydown', function(e) {
             setPageEditorMode(false);
             return;
         }
+        const libModal = document.getElementById('library-modal');
+        if (libModal && !libModal.classList.contains('hidden')) {
+            closeLibraryModal();
+            return;
+        }
         cancelPageDrag();
     }
-    if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+        const libModal = document.getElementById('library-modal');
+        if (libModal && !libModal.classList.contains('hidden')) return;
+        deleteSelected();
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
     if ((e.ctrlKey || e.metaKey) && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); redo(); }
     if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) { e.preventDefault(); changeLayer('up'); }
@@ -2257,6 +2275,7 @@ function updateAuthUI() {
         currentProjectName = null;
         updateCurrentProjectLabel();
     }
+    void refreshAdminFlag();
 }
 
 function updateCurrentProjectLabel() {
@@ -2362,9 +2381,297 @@ async function handleAuthSubmit(event) {
 async function logout() {
     if (supabaseClient) await supabaseClient.auth.signOut();
     currentUser = null;
+    isAdmin = false;
     updateAuthUI();
     showToast('Sei uscito dall\'account');
 }
+
+const LIBRARY_BUCKET = 'library';
+const LIBRARY_MAX_BYTES = 6 * 1024 * 1024;
+const LIBRARY_CATEGORIES = [
+    { id: 'all', label: 'Tutti' },
+    { id: 'divisori', label: 'Divisori' },
+    { id: 'cornici', label: 'Cornici' },
+    { id: 'sticker', label: 'Sticker' },
+    { id: 'forme', label: 'Forme' },
+    { id: 'altro', label: 'Altro' }
+];
+
+function isLibraryCategory(value) {
+    return LIBRARY_CATEGORIES.some(c => c.id === value && c.id !== 'all');
+}
+
+function assetNameFromFile(file) {
+    const raw = String(file && file.name || 'Asset').replace(/\.[^.]+$/, '');
+    return raw.trim().slice(0, 80) || 'Asset';
+}
+
+function isAllowedLibraryFile(file) {
+    const type = String(file && file.type || '').toLowerCase();
+    const name = String(file && file.name || '').toLowerCase();
+    if (type === 'image/png' || type === 'image/webp') return true;
+    return name.endsWith('.png') || name.endsWith('.webp');
+}
+
+function libraryObjectUrl(path) {
+    const { data } = requireSupabase().storage.from(LIBRARY_BUCKET).getPublicUrl(path);
+    return data.publicUrl;
+}
+
+function updateAdminOnlyUI() {
+    document.querySelectorAll('[data-admin-only]').forEach(el => {
+        el.classList.toggle('hidden', !isAdmin);
+        if (el.id === 'library-admin' || el.id === 'btn-admin-library') {
+            el.classList.toggle('flex', false);
+        }
+    });
+    const adminBar = document.getElementById('library-admin');
+    if (adminBar) adminBar.classList.toggle('hidden', !isAdmin);
+    const adminBtn = document.getElementById('btn-admin-library');
+    if (adminBtn) {
+        if (isAdmin && currentUser) adminBtn.classList.remove('hidden');
+        else adminBtn.classList.add('hidden');
+    }
+    if (libraryLoaded) renderLibraryGrid();
+}
+
+async function refreshAdminFlag() {
+    isAdmin = false;
+    if (currentUser && supabaseClient) {
+        try {
+            const { data, error } = await supabaseClient
+                .from('profiles')
+                .select('is_admin')
+                .eq('id', currentUser.id)
+                .maybeSingle();
+            if (!error) isAdmin = !!(data && data.is_admin);
+        } catch (err) {
+            console.warn('Lettura ruolo admin fallita', err);
+        }
+    }
+    updateAdminOnlyUI();
+}
+
+function renderLibraryCategories() {
+    const wrap = document.getElementById('library-cats');
+    if (!wrap) return;
+    wrap.innerHTML = LIBRARY_CATEGORIES.map(cat => (
+        `<button type="button" class="library-cat${libraryCategory === cat.id ? ' is-active' : ''}" data-cat="${cat.id}">${cat.label}</button>`
+    )).join('');
+    wrap.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            libraryCategory = btn.dataset.cat;
+            renderLibraryCategories();
+            renderLibraryGrid();
+        });
+    });
+}
+
+function renderLibraryGrid() {
+    const grid = document.getElementById('library-grid');
+    if (!grid) return;
+    const items = libraryCategory === 'all'
+        ? libraryAssets
+        : libraryAssets.filter(a => a.category === libraryCategory);
+
+    if (!items.length) {
+        grid.innerHTML = `<p class="col-span-full text-sm text-gray-400 text-center py-8">${
+            libraryLoaded
+                ? (isAdmin ? 'Nessun PNG in questa categoria. Caricane uno sopra.' : 'La libreria è vuota. Torna più tardi.')
+                : 'Caricamento…'
+        }</p>`;
+        return;
+    }
+
+    grid.innerHTML = items.map(asset => {
+        const url = libraryObjectUrl(asset.storage_path);
+        const del = isAdmin
+            ? `<button type="button" class="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 text-red-500 text-sm font-bold shadow" data-del="${asset.id}" aria-label="Elimina">✕</button>`
+            : '';
+        return `<button type="button" class="asset-card relative rounded-xl overflow-hidden border border-gray-200 text-left" data-add="${asset.id}">
+            <span class="asset-thumb block aspect-square">
+                <img src="${escapeHtml(url)}" alt="" class="w-full h-full object-contain">
+            </span>
+            <span class="block px-1.5 py-1 text-[10px] font-semibold text-gray-600 truncate">${escapeHtml(asset.name)}</span>
+            ${del}
+        </button>`;
+    }).join('');
+
+    grid.querySelectorAll('[data-add]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            if (e.target.closest('[data-del]')) return;
+            addLibraryAssetToCanvas(btn.dataset.add);
+        });
+    });
+    grid.querySelectorAll('[data-del]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteLibraryAsset(btn.dataset.del);
+        });
+    });
+}
+
+async function refreshLibraryAssets() {
+    const grid = document.getElementById('library-grid');
+    if (!supabaseClient) {
+        libraryAssets = [];
+        libraryLoaded = true;
+        if (grid) grid.innerHTML = '<p class="col-span-full text-sm text-gray-400 text-center py-8">Supabase non configurato.</p>';
+        return;
+    }
+    try {
+        const { data, error } = await supabaseClient
+            .from('library_assets')
+            .select('id, name, category, storage_path, created_at')
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        libraryAssets = data || [];
+        libraryLoaded = true;
+        renderLibraryGrid();
+    } catch (err) {
+        console.warn('Libreria non disponibile', err);
+        libraryLoaded = true;
+        if (grid) {
+            grid.innerHTML = '<p class="col-span-full text-sm text-red-500 text-center py-8">Impossibile caricare la libreria. Esegui la migration SQL.</p>';
+        }
+    }
+}
+
+async function openLibraryModal(opts) {
+    if (!supabaseClient) {
+        showToast('Supabase non configurato. Imposta le env vars su Vercel.', true);
+        return;
+    }
+    if (opts && opts.admin && !isAdmin) {
+        showToast('Accesso admin richiesto', true);
+        return;
+    }
+    const modal = document.getElementById('library-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    renderLibraryCategories();
+    updateAdminOnlyUI();
+    await refreshLibraryAssets();
+}
+
+function closeLibraryModal() {
+    const modal = document.getElementById('library-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+async function addLibraryAssetToCanvas(id) {
+    const asset = libraryAssets.find(a => a.id === id);
+    if (!asset) return;
+    if (pageEditorMode) setPageEditorMode(false);
+    const url = libraryObjectUrl(asset.storage_path);
+    const hint = document.getElementById('hint-toast');
+    if (hint) hint.textContent = 'Inserimento grafica…';
+    try {
+        await new Promise((resolve, reject) => {
+            fabric.Image.fromURL(url, function(img) {
+                try {
+                    if (!img || typeof img.width !== 'number') {
+                        reject(new Error('Immagine non decodificata'));
+                        return;
+                    }
+                    placeFabricImageOnCurrentPage(img);
+                    resolve();
+                } catch (err) {
+                    reject(err);
+                }
+            }, { crossOrigin: 'anonymous' });
+        });
+        closeLibraryModal();
+        showToast('Grafica aggiunta');
+        updateMobileHint();
+    } catch (err) {
+        console.warn(err);
+        showToast('Non riesco a inserire questo PNG', true);
+        updateMobileHint();
+    }
+}
+
+async function uploadLibraryFiles(fileList) {
+    if (!isAdmin) {
+        showToast('Solo l\'admin può caricare nella libreria', true);
+        return;
+    }
+    const category = document.getElementById('library-upload-category').value;
+    if (!isLibraryCategory(category)) {
+        showToast('Categoria non valida', true);
+        return;
+    }
+    const sb = requireSupabase();
+    const files = Array.from(fileList || []);
+    let ok = 0;
+    for (const file of files) {
+        if (!isAllowedLibraryFile(file)) {
+            showToast(`${file.name}: usa PNG o WebP`, true);
+            continue;
+        }
+        if (file.size > LIBRARY_MAX_BYTES) {
+            showToast(`${file.name}: max 6 MB`, true);
+            continue;
+        }
+        const ext = String(file.name || '').toLowerCase().endsWith('.webp') || file.type === 'image/webp' ? 'webp' : 'png';
+        const id = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const path = `${category}/${id}.${ext}`;
+        const { error: upErr } = await sb.storage.from(LIBRARY_BUCKET).upload(path, file, {
+            contentType: ext === 'webp' ? 'image/webp' : 'image/png',
+            upsert: false,
+            cacheControl: '3600'
+        });
+        if (upErr) {
+            showToast(upErr.message || `Upload fallito: ${file.name}`, true);
+            continue;
+        }
+        const { error: rowErr } = await sb.from('library_assets').insert({
+            name: assetNameFromFile(file),
+            category,
+            storage_path: path,
+            created_by: currentUser && currentUser.id
+        });
+        if (rowErr) {
+            await sb.storage.from(LIBRARY_BUCKET).remove([path]);
+            showToast(rowErr.message || 'Salvataggio catalogo fallito', true);
+            continue;
+        }
+        ok += 1;
+    }
+    if (ok) {
+        showToast(ok === 1 ? 'PNG caricato in libreria' : `${ok} PNG caricati in libreria`);
+        await refreshLibraryAssets();
+    }
+}
+
+async function deleteLibraryAsset(id) {
+    if (!isAdmin) return;
+    const asset = libraryAssets.find(a => a.id === id);
+    if (!asset) return;
+    if (!confirm(`Eliminare “${asset.name}” dalla libreria?`)) return;
+    try {
+        const sb = requireSupabase();
+        const { error: rowErr } = await sb.from('library_assets').delete().eq('id', id);
+        if (rowErr) throw rowErr;
+        await sb.storage.from(LIBRARY_BUCKET).remove([asset.storage_path]);
+        showToast('Rimosso dalla libreria');
+        await refreshLibraryAssets();
+    } catch (err) {
+        showToast(err.message || 'Eliminazione fallita', true);
+    }
+}
+
+document.getElementById('library-upload').addEventListener('change', async function(e) {
+    const files = e.target.files;
+    e.target.value = '';
+    if (files && files.length) await uploadLibraryFiles(files);
+});
+document.getElementById('library-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeLibraryModal();
+});
 
 
 
@@ -2687,6 +2994,7 @@ async function initAuth() {
     const { data: { session } } = await supabaseClient.auth.getSession();
     currentUser = session ? session.user : null;
     updateAuthUI();
+    await refreshAdminFlag();
     supabaseClient.auth.onAuthStateChange((_event, session) => {
         currentUser = session ? session.user : null;
         updateAuthUI();
@@ -2725,6 +3033,8 @@ Object.assign(window, {
   loadCloudProject,
   renameCloudProject,
   deleteCloudProject,
+  openLibraryModal,
+  closeLibraryModal,
 });
 
 (async function boot() {
