@@ -1608,7 +1608,39 @@ function loadHtmlImage(src) {
     });
 }
 
-function rasterizeImageElement(img, maxShortSide, quality) {
+function fileMayHaveAlpha(file) {
+    const type = String(file && file.type || '').toLowerCase();
+    if (type === 'image/jpeg' || type === 'image/jpg') return false;
+    const name = String(file && file.name || '').toLowerCase();
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return false;
+    return true;
+}
+
+function imageDataHasAlpha(data) {
+    if (!data || !data.length) return false;
+    for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < 255) return true;
+    }
+    return false;
+}
+
+function imageHasAlpha(img) {
+    const srcW = img.naturalWidth || img.width || 1;
+    const srcH = img.naturalHeight || img.height || 1;
+    const maxSample = 320;
+    const scale = Math.min(1, maxSample / Math.max(srcW, srcH));
+    const w = Math.max(1, Math.round(srcW * scale));
+    const h = Math.max(1, Math.round(srcH * scale));
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true, alpha: true });
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    return imageDataHasAlpha(ctx.getImageData(0, 0, w, h).data);
+}
+
+function rasterizeImageElement(img, maxShortSide, quality, { preserveAlpha = false } = {}) {
     const srcW = img.naturalWidth || img.width;
     const srcH = img.naturalHeight || img.height;
     const shortSide = Math.min(srcW, srcH) || 1;
@@ -1622,12 +1654,17 @@ function rasterizeImageElement(img, maxShortSide, quality) {
     const c = document.createElement('canvas');
     c.width = w;
     c.height = h;
-    const ctx = c.getContext('2d');
+    const ctx = c.getContext('2d', { alpha: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
+    ctx.clearRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
+    // JPEG non ha alpha: i pixel trasparenti diventerebbero neri
+    const dataURL = preserveAlpha
+        ? c.toDataURL('image/png')
+        : c.toDataURL('image/jpeg', quality);
     return {
-        dataURL: c.toDataURL('image/jpeg', quality),
+        dataURL,
         width: w,
         height: h
     };
@@ -1771,6 +1808,7 @@ async function prepareImageForCanvas(file) {
     const srcH = source.naturalHeight || source.height;
     const shortSide = Math.min(srcW, srcH) || 1;
     const mobile = isMobileUI();
+    const preserveAlpha = fileMayHaveAlpha(file) && imageHasAlpha(source);
 
     if (!mobile) {
         if (shortSide <= MAX_IMAGE_SHORT_SIDE) {
@@ -1781,7 +1819,7 @@ async function prepareImageForCanvas(file) {
                 proxyNaturalHeight: srcH
             };
         }
-        const display = rasterizeImageElement(source, MAX_IMAGE_SHORT_SIDE, 0.92);
+        const display = rasterizeImageElement(source, MAX_IMAGE_SHORT_SIDE, 0.92, { preserveAlpha });
         return {
             dataURL: display.dataURL,
             hiResId: null,
@@ -1799,9 +1837,9 @@ async function prepareImageForCanvas(file) {
         };
     }
 
-    const display = rasterizeImageElement(source, PROXY_SHORT_SIDE, 0.82);
+    const display = rasterizeImageElement(source, PROXY_SHORT_SIDE, 0.82, { preserveAlpha });
 
-    const hi = rasterizeImageElement(source, HIRES_SHORT_SIDE, 0.92);
+    const hi = rasterizeImageElement(source, HIRES_SHORT_SIDE, 0.92, { preserveAlpha });
     const hiResId = newHiResId();
     try {
         await putHiResBlob(hiResId, dataURLToBlob(hi.dataURL));
