@@ -308,9 +308,9 @@ function configureObjectControls(obj) {
             cornerColor: '#ef4444',
             borderColor: '#ef4444',
             cornerStrokeColor: '#ffffff',
-            cornerSize: mobile ? 36 : 16,
-            touchCornerSize: mobile ? 72 : 28,
-            padding: mobile ? 12 : 0
+            cornerSize: mobile ? 44 : 16,
+            touchCornerSize: mobile ? 88 : 28,
+            padding: mobile ? 14 : 0
         });
         return;
     }
@@ -739,8 +739,15 @@ function updateToolbarPosition() {
     }
     toolbar.style.display = 'flex';
     const boundingRect = activeObj.getBoundingRect(false);
-    toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
-    toolbar.style.top = boundingRect.top + 'px';
+    if (isMobileUI()) {
+        toolbar.style.left = (boundingRect.left + boundingRect.width / 2) + 'px';
+        toolbar.style.top = boundingRect.top + 'px';
+        toolbar.style.transform = 'translate(-50%, calc(-100% - 10px))';
+    } else {
+        toolbar.style.left = (boundingRect.left + boundingRect.width) + 'px';
+        toolbar.style.top = boundingRect.top + 'px';
+        toolbar.style.transform = 'translate(-100%, calc(-100% - 12px))';
+    }
 }
 
 function onSelectionControls(e) {
@@ -808,9 +815,9 @@ function startCrop() {
         cornerColor: '#ef4444',
         borderColor: '#ef4444',
         cornerStrokeColor: '#ffffff',
-        cornerSize: mobile ? 36 : 16,
-        touchCornerSize: mobile ? 72 : 28,
-        padding: mobile ? 12 : 0,
+        cornerSize: mobile ? 44 : 16,
+        touchCornerSize: mobile ? 88 : 28,
+        padding: mobile ? 14 : 0,
         transparentCorners: false,
         hasRotatingPoint: false,
         lockRotation: true,

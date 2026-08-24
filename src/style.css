@@ -87,8 +87,11 @@
         /* Tasti crop / z-index in pixel schermo (toolbar fuori dall'overlay scalato) */
         @media (hover: none) and (pointer: coarse), (max-width: 899px) {
             #floating-toolbar {
-                gap: 0.6rem;
-                padding: 0.65rem 0.8rem;
+                gap: 0.55rem;
+                padding: 0.6rem 0.75rem;
+                max-width: calc(100vw - 16px);
+                flex-wrap: wrap;
+                justify-content: center;
             }
             #floating-toolbar #normal-tools {
                 gap: 0.4rem;
