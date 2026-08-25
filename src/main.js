@@ -2560,7 +2560,7 @@ function closeLibraryModal() {
     modal.classList.remove('flex');
 }
 
-async function addLibraryAssetToCanvas(id) {
+async function addLibraryAssetToCanvas(id, { keepOpen = false } = {}) {
     const asset = libraryAssets.find(a => a.id === id);
     if (!asset) return;
     if (pageEditorMode) setPageEditorMode(false);
@@ -2582,8 +2582,8 @@ async function addLibraryAssetToCanvas(id) {
                 }
             }, { crossOrigin: 'anonymous' });
         });
-        closeLibraryModal();
-        showToast('Grafica aggiunta');
+        if (!keepOpen) closeLibraryModal();
+        showToast('Grafica aggiunta alla pagina');
         updateMobileHint();
     } catch (err) {
         console.warn(err);
@@ -2594,56 +2594,92 @@ async function addLibraryAssetToCanvas(id) {
 
 async function uploadLibraryFiles(fileList) {
     if (!isAdmin) {
-        showToast('Solo l\'admin può caricare nella libreria', true);
+        showToast('Solo l\'admin può caricare nella libreria. Accedi con l\'account admin.', true);
         return;
     }
-    const category = document.getElementById('library-upload-category').value;
+    const categoryEl = document.getElementById('library-upload-category');
+    const category = categoryEl ? categoryEl.value : '';
     if (!isLibraryCategory(category)) {
         showToast('Categoria non valida', true);
         return;
     }
-    const sb = requireSupabase();
     const files = Array.from(fileList || []);
-    let ok = 0;
-    for (const file of files) {
-        if (!isAllowedLibraryFile(file)) {
-            showToast(`${file.name}: usa PNG o WebP`, true);
-            continue;
-        }
-        if (file.size > LIBRARY_MAX_BYTES) {
-            showToast(`${file.name}: max 6 MB`, true);
-            continue;
-        }
-        const ext = String(file.name || '').toLowerCase().endsWith('.webp') || file.type === 'image/webp' ? 'webp' : 'png';
-        const id = (window.crypto && crypto.randomUUID)
-            ? crypto.randomUUID()
-            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const path = `${category}/${id}.${ext}`;
-        const { error: upErr } = await sb.storage.from(LIBRARY_BUCKET).upload(path, file, {
-            contentType: ext === 'webp' ? 'image/webp' : 'image/png',
-            upsert: false,
-            cacheControl: '3600'
-        });
-        if (upErr) {
-            showToast(upErr.message || `Upload fallito: ${file.name}`, true);
-            continue;
-        }
-        const { error: rowErr } = await sb.from('library_assets').insert({
-            name: assetNameFromFile(file),
-            category,
-            storage_path: path,
-            created_by: currentUser && currentUser.id
-        });
-        if (rowErr) {
-            await sb.storage.from(LIBRARY_BUCKET).remove([path]);
-            showToast(rowErr.message || 'Salvataggio catalogo fallito', true);
-            continue;
-        }
-        ok += 1;
+    if (!files.length) {
+        showToast('Nessun file selezionato', true);
+        return;
     }
-    if (ok) {
-        showToast(ok === 1 ? 'PNG caricato in libreria' : `${ok} PNG caricati in libreria`);
-        await refreshLibraryAssets();
+
+    showToast('Caricamento in libreria…');
+    let ok = 0;
+    let lastId = null;
+    try {
+        const sb = requireSupabase();
+        for (const file of files) {
+            if (!isAllowedLibraryFile(file)) {
+                showToast(`${file.name}: usa un PNG o WebP (non JPEG/HEIC)`, true);
+                continue;
+            }
+            if (file.size > LIBRARY_MAX_BYTES) {
+                showToast(`${file.name}: max 6 MB`, true);
+                continue;
+            }
+            const ext = String(file.name || '').toLowerCase().endsWith('.webp') || file.type === 'image/webp' ? 'webp' : 'png';
+            const id = (window.crypto && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const path = `${category}/${id}.${ext}`;
+            const { error: upErr } = await sb.storage.from(LIBRARY_BUCKET).upload(path, file, {
+                contentType: ext === 'webp' ? 'image/webp' : 'image/png',
+                upsert: false,
+                cacheControl: '3600'
+            });
+            if (upErr) {
+                const hint = /bucket|not found|does not exist/i.test(upErr.message || '')
+                    ? ' Esegui la migration SQL 004_library_assets.sql su Supabase.'
+                    : '';
+                showToast((upErr.message || `Upload fallito: ${file.name}`) + hint, true);
+                continue;
+            }
+            const { data: row, error: rowErr } = await sb.from('library_assets').insert({
+                name: assetNameFromFile(file),
+                category,
+                storage_path: path,
+                created_by: currentUser && currentUser.id
+            }).select('id').single();
+            if (rowErr) {
+                await sb.storage.from(LIBRARY_BUCKET).remove([path]);
+                const hint = /schema cache|does not exist|relation/i.test(rowErr.message || '')
+                    ? ' Esegui la migration SQL 004_library_assets.sql su Supabase.'
+                    : '';
+                showToast((rowErr.message || 'Salvataggio catalogo fallito') + hint, true);
+                continue;
+            }
+            ok += 1;
+            lastId = row && row.id;
+            if (lastId && !libraryAssets.some(a => a.id === lastId)) {
+                libraryAssets.unshift({
+                    id: lastId,
+                    name: assetNameFromFile(file),
+                    category,
+                    storage_path: path,
+                    created_at: new Date().toISOString()
+                });
+            }
+        }
+    } catch (err) {
+        showToast(err.message || 'Upload libreria fallito', true);
+        return;
+    }
+
+    if (!ok) return;
+    await refreshLibraryAssets();
+    if (lastId) {
+        await addLibraryAssetToCanvas(lastId);
+        showToast(ok === 1
+            ? 'Salvato in Grafica e inserito nella pagina'
+            : `${ok} PNG in libreria; l’ultimo è sulla pagina`);
+    } else {
+        showToast(ok === 1 ? 'PNG salvato in Grafica' : `${ok} PNG salvati in Grafica`);
     }
 }
 
@@ -2665,9 +2701,9 @@ async function deleteLibraryAsset(id) {
 }
 
 document.getElementById('library-upload').addEventListener('change', async function(e) {
-    const files = e.target.files;
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (files && files.length) await uploadLibraryFiles(files);
+    if (files.length) await uploadLibraryFiles(files);
 });
 document.getElementById('library-modal').addEventListener('click', function(e) {
     if (e.target === this) closeLibraryModal();
