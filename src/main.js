@@ -297,6 +297,19 @@ canvas.imageSmoothingEnabled = true;
 if (canvas.lowerCanvasEl) canvas.lowerCanvasEl.style.background = 'transparent';
 if (canvas.upperCanvasEl) canvas.upperCanvasEl.style.background = 'transparent';
 
+// Fabric 5 disegna oggetti E bounding box/maniglie sullo stesso lower-canvas
+// (i controlli dopo restore del clip). Clippa solo i pixel delle foto/testi
+// alle pagine: le maniglie crop/resize/rotate restano visibili nel bleed.
+const fabricRenderObjects = canvas._renderObjects;
+canvas._renderObjects = function (ctx, objects) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, pageW * squareCount, pageH);
+    ctx.clip();
+    fabricRenderObjects.call(this, ctx, objects);
+    ctx.restore();
+};
+
 /** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
 function configureObjectControls(obj) {
     if (!obj || obj.isGuideLine || obj.isAlignmentLine) return;
