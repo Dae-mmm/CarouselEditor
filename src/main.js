@@ -803,6 +803,7 @@ document.getElementById('workspace').addEventListener('wheel', function(e) {
 window.addEventListener('resize', () => {
     canvas.calcOffset();
     centerStagePadding();
+    scrollToPage(currentVisiblePage, false);
     updateMobileHint();
     applyInteractionMode();
     configureAllObjectControls();
@@ -1162,10 +1163,15 @@ function scrollToPage(index, smooth) {
     const workspace = document.getElementById('workspace');
     const stage = document.getElementById('canvas-stage');
     const padX = parseFloat(stage.style.paddingLeft) || 0;
+    const padY = parseFloat(stage.style.paddingTop) || 0;
     const bleedPx = canvasBleed * currentZoom;
-    const target = padX + bleedPx + index * pageW * currentZoom - (workspace.clientWidth - pageW * currentZoom) / 2;
+    const pageDispW = pageW * currentZoom;
+    const pageDispH = pageH * currentZoom;
+    const targetLeft = padX + bleedPx + index * pageDispW - (workspace.clientWidth - pageDispW) / 2;
+    const targetTop = padY + bleedPx - (workspace.clientHeight - pageDispH) / 2;
     workspace.scrollTo({
-        left: Math.max(0, target),
+        left: Math.max(0, targetLeft),
+        top: Math.max(0, targetTop),
         behavior: smooth ? 'smooth' : 'auto'
     });
     renderPagesUI();
@@ -3196,10 +3202,14 @@ Object.assign(window, {
         initHistory();
     }
 
-    // Sempre centratura/zoom, anche dopo restore async
-    fitToScreen();
     applyInteractionMode();
     configureAllObjectControls();
     renderPagesUI();
+    // Layout flex a volte è pronto solo al frame successivo: centra due volte.
+    fitToScreen();
+    requestAnimationFrame(() => {
+        fitToScreen();
+        requestAnimationFrame(() => fitToScreen());
+    });
 })();
     
