@@ -30,6 +30,7 @@
             -webkit-overflow-scrolling: touch;
             touch-action: pan-x pan-y;
             overscroll-behavior: contain;
+            overflow-anchor: none;
         }
 
         #workspace::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -46,10 +47,25 @@
         #canvas-wrapper {
             transform-origin: top left;
             touch-action: none;
+            background: transparent;
+            overflow: visible;
+        }
+        #page-fill {
+            position: absolute;
+            background: #ffffff;
+            box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+            pointer-events: none;
+            z-index: 0;
+        }
+        #canvas-wrapper .canvas-container {
+            background: transparent !important;
+            z-index: 1;
+            overflow: visible;
         }
         #canvas-wrapper .canvas-container,
         #canvas-wrapper canvas {
             touch-action: none;
+            background: transparent !important;
         }
 
         #overlay-layer {
