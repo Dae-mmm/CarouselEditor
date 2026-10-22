@@ -86,6 +86,10 @@ let imgToCrop = null;
 let currentZoom = 1;
 const MAX_ZOOM = 3;
 const MIN_ZOOM = 0.1;
+const MIN_CANVAS_BLEED = 320;
+const MAX_CANVAS_BLEED = 1800;
+const CONTROL_BLEED_PAD = 72;
+let canvasBleed = MIN_CANVAS_BLEED;
 
 let deferredInstallPrompt = null;
 let currentVisiblePage = 0;
@@ -279,7 +283,7 @@ const rotOffset = 22;
 const canvas = new fabric.Canvas('canvas', {
     width: pageW,
     height: pageH,
-    backgroundColor: '#ffffff',
+    backgroundColor: '',
     preserveObjectStacking: true,
     uniformScaling: false,
     uniScaleKey: 'shiftKey',
@@ -287,9 +291,24 @@ const canvas = new fabric.Canvas('canvas', {
     selection: true,
     enableRetinaScaling: false,
     renderOnAddRemove: true,
-    skipOffscreen: true
+    skipOffscreen: false
 });
 canvas.imageSmoothingEnabled = true;
+if (canvas.lowerCanvasEl) canvas.lowerCanvasEl.style.background = 'transparent';
+if (canvas.upperCanvasEl) canvas.upperCanvasEl.style.background = 'transparent';
+
+// Fabric 5 disegna oggetti E bounding box/maniglie sullo stesso lower-canvas
+// (i controlli dopo restore del clip). Clippa solo i pixel delle foto/testi
+// alle pagine: le maniglie crop/resize/rotate restano visibili nel bleed.
+const fabricRenderObjects = canvas._renderObjects;
+canvas._renderObjects = function (ctx, objects) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, pageW * squareCount, pageH);
+    ctx.clip();
+    fabricRenderObjects.call(this, ctx, objects);
+    ctx.restore();
+};
 
 /** Su mobile: niente maniglie scale/rotate (si usa multitouch). */
 function configureObjectControls(obj) {
@@ -394,11 +413,14 @@ function loadHistoryState(state) {
 }
 
 canvas.on('object:modified', saveState);
+canvas.on('object:modified', () => ensureCanvasBleed({ allowShrink: true }));
 canvas.on('object:added', (e) => {
     if (!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
+    if (!isHistoryAction && !isExporting) ensureCanvasBleed({ allowShrink: false });
 });
 canvas.on('object:removed', (e) => {
     if (!isHistoryAction && !e.target.isGuideLine && !e.target.isCropRect && !e.target.isAlignmentLine) saveState();
+    if (!isHistoryAction && !isExporting) ensureCanvasBleed({ allowShrink: true });
 });
 
 // --- SMART GUIDES ---
@@ -640,23 +662,89 @@ canvas.on('after:render', function() {
 });
 
 // --- ZOOM & CENTER ---
+function getPageBgColor() {
+    const el = document.getElementById('bg-color');
+    const fromInput = el && el.value;
+    if (fromInput) return fromInput;
+    if (canvas.backgroundColor && canvas.backgroundColor !== 'transparent') return canvas.backgroundColor;
+    return '#ffffff';
+}
+
+function computeCanvasBleed() {
+    let bleed = MIN_CANVAS_BLEED;
+    if (typeof canvas === 'undefined' || !canvas) return bleed;
+    const pagesW = pageW * squareCount;
+    canvas.getObjects().forEach(obj => {
+        if (obj.isGuideLine || obj.isAlignmentLine) return;
+        let bounds;
+        try {
+            bounds = obj.getBoundingRect(true);
+        } catch (_) {
+            return;
+        }
+        bleed = Math.max(
+            bleed,
+            CONTROL_BLEED_PAD - bounds.left,
+            CONTROL_BLEED_PAD - bounds.top,
+            bounds.left + bounds.width - pagesW + CONTROL_BLEED_PAD,
+            bounds.top + bounds.height - pageH + CONTROL_BLEED_PAD
+        );
+    });
+    return Math.min(MAX_CANVAS_BLEED, Math.ceil(bleed));
+}
+
+function applyPageFill() {
+    const fill = document.getElementById('page-fill');
+    if (!fill) return;
+    const bleedPx = canvasBleed * currentZoom;
+    fill.style.left = bleedPx + 'px';
+    fill.style.top = bleedPx + 'px';
+    fill.style.width = (pageW * squareCount * currentZoom) + 'px';
+    fill.style.height = (pageH * currentZoom) + 'px';
+    fill.style.backgroundColor = getPageBgColor();
+}
+
+function applyCanvasViewport() {
+    const zoom = currentZoom;
+    canvas.setViewportTransform([
+        zoom, 0, 0, zoom,
+        canvasBleed * zoom,
+        canvasBleed * zoom
+    ]);
+}
+
+function ensureCanvasBleed({ allowShrink = false } = {}) {
+    const next = computeCanvasBleed();
+    if (next > canvasBleed + 12 || (allowShrink && Math.abs(next - canvasBleed) > 12)) {
+        applyZoom();
+    }
+}
+
 function applyZoom() {
     const wrapper = document.getElementById('canvas-wrapper');
     const overlay = document.getElementById('overlay-layer');
-    const dispW = Math.max(1, pageW * squareCount * currentZoom);
-    const dispH = Math.max(1, pageH * currentZoom);
+    canvasBleed = computeCanvasBleed();
+    const pagesDispW = pageW * squareCount * currentZoom;
+    const pagesDispH = pageH * currentZoom;
+    const bleedPx = canvasBleed * currentZoom;
+    const dispW = Math.max(1, pagesDispW + bleedPx * 2);
+    const dispH = Math.max(1, pagesDispH + bleedPx * 2);
     wrapper.style.transform = 'none';
     wrapper.style.width = dispW + 'px';
     wrapper.style.height = dispH + 'px';
     wrapper.style.marginRight = '0px';
     wrapper.style.marginBottom = '0px';
     if (overlay) {
+        overlay.style.left = bleedPx + 'px';
+        overlay.style.top = bleedPx + 'px';
         overlay.style.width = (pageW * squareCount) + 'px';
         overlay.style.height = pageH + 'px';
         overlay.style.transform = `scale(${currentZoom})`;
     }
+    applyPageFill();
+    canvas.backgroundColor = '';
     canvas.setDimensions({ width: dispW, height: dispH });
-    canvas.setZoom(currentZoom);
+    applyCanvasViewport();
     canvas.calcOffset();
     document.getElementById('zoom-level').innerText = Math.round(currentZoom * 100) + '%';
     centerStagePadding();
@@ -668,15 +756,16 @@ function centerStagePadding() {
     const stage = document.getElementById('canvas-stage');
     const scaledW = pageW * currentZoom;
     const scaledH = pageH * currentZoom;
+    const bleedPx = canvasBleed * currentZoom;
     const totalW = scaledW * squareCount;
-    const padX = Math.max(16, (workspace.clientWidth - scaledW) / 2);
-    const padY = Math.max(16, (workspace.clientHeight - scaledH) / 2);
+    const padX = Math.max(16, (workspace.clientWidth - scaledW) / 2 - bleedPx);
+    const padY = Math.max(16, (workspace.clientHeight - scaledH) / 2 - bleedPx);
     stage.style.paddingLeft = padX + 'px';
     stage.style.paddingRight = padX + 'px';
     stage.style.paddingTop = padY + 'px';
     stage.style.paddingBottom = padY + 'px';
-    stage.style.width = (totalW + padX * 2) + 'px';
-    stage.style.minHeight = (scaledH + padY * 2) + 'px';
+    stage.style.width = (totalW + bleedPx * 2 + padX * 2) + 'px';
+    stage.style.minHeight = (scaledH + bleedPx * 2 + padY * 2) + 'px';
 }
 
 function fitToScreen() {
@@ -714,6 +803,7 @@ document.getElementById('workspace').addEventListener('wheel', function(e) {
 window.addEventListener('resize', () => {
     canvas.calcOffset();
     centerStagePadding();
+    scrollToPage(currentVisiblePage, false);
     updateMobileHint();
     applyInteractionMode();
     configureAllObjectControls();
@@ -1073,9 +1163,15 @@ function scrollToPage(index, smooth) {
     const workspace = document.getElementById('workspace');
     const stage = document.getElementById('canvas-stage');
     const padX = parseFloat(stage.style.paddingLeft) || 0;
-    const target = padX + index * pageW * currentZoom - (workspace.clientWidth - pageW * currentZoom) / 2;
+    const padY = parseFloat(stage.style.paddingTop) || 0;
+    const bleedPx = canvasBleed * currentZoom;
+    const pageDispW = pageW * currentZoom;
+    const pageDispH = pageH * currentZoom;
+    const targetLeft = padX + bleedPx + index * pageDispW - (workspace.clientWidth - pageDispW) / 2;
+    const targetTop = padY + bleedPx - (workspace.clientHeight - pageDispH) / 2;
     workspace.scrollTo({
-        left: Math.max(0, target),
+        left: Math.max(0, targetLeft),
+        top: Math.max(0, targetTop),
         behavior: smooth ? 'smooth' : 'auto'
     });
     renderPagesUI();
@@ -1085,7 +1181,8 @@ function updateVisiblePageFromScroll() {
     const workspace = document.getElementById('workspace');
     const stage = document.getElementById('canvas-stage');
     const padX = parseFloat(stage.style.paddingLeft) || 0;
-    const centerX = workspace.scrollLeft + workspace.clientWidth / 2 - padX;
+    const bleedPx = canvasBleed * currentZoom;
+    const centerX = workspace.scrollLeft + workspace.clientWidth / 2 - padX - bleedPx;
     const page = Math.round(centerX / (pageW * currentZoom) - 0.5);
     const clamped = Math.max(0, Math.min(squareCount - 1, page));
     if (clamped !== currentVisiblePage) {
@@ -1183,8 +1280,8 @@ function capturePageOwnedPreview(pageIndex) {
 
     const dataURL = canvas.toDataURL({
         format: 'png',
-        left: pageIndex * pageW * currentZoom,
-        top: 0,
+        left: (canvasBleed + pageIndex * pageW) * currentZoom,
+        top: canvasBleed * currentZoom,
         width: pageW * currentZoom,
         height: pageH * currentZoom,
         enableRetinaScaling: false
@@ -1418,6 +1515,7 @@ function onPointerUp() {
         return;
     }
     if (pageDrag.active) finishPageDrag();
+    ensureCanvasBleed({ allowShrink: true });
 }
 
 canvas.on('mouse:up', onPointerUp);
@@ -1443,8 +1541,8 @@ function clientToCanvasCoords(clientX, clientY) {
     const wrapper = document.getElementById('canvas-wrapper');
     const rect = wrapper.getBoundingClientRect();
     return {
-        x: (clientX - rect.left) / currentZoom,
-        y: (clientY - rect.top) / currentZoom
+        x: (clientX - rect.left) / currentZoom - canvasBleed,
+        y: (clientY - rect.top) / currentZoom - canvasBleed
     };
 }
 
@@ -1574,8 +1672,7 @@ upperCanvas.addEventListener('touchcancel', () => {
 document.getElementById('bg-color').addEventListener('input', function(e) {
     const color = e.target.value;
     document.getElementById('bg-color-icon').style.backgroundColor = color;
-    canvas.backgroundColor = color;
-    canvas.renderAll();
+    applyPageFill();
 });
 document.getElementById('bg-color').addEventListener('change', saveState);
 
@@ -1900,12 +1997,15 @@ async function withHighResSources(fn) {
 }
 
 async function withNativeCanvasResolution(fn) {
-    canvas.setZoom(1);
+    const bg = getPageBgColor();
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
     canvas.setDimensions({ width: pageW * squareCount, height: pageH });
+    canvas.backgroundColor = bg;
     canvas.renderAll();
     try {
         return await fn();
     } finally {
+        canvas.backgroundColor = '';
         applyZoom();
     }
 }
@@ -2047,7 +2147,7 @@ function buildProjectPayload() {
         version: PROJECT_VERSION,
         squareCount,
         aspectRatio,
-        backgroundColor: canvas.backgroundColor,
+        backgroundColor: getPageBgColor(),
         // Fabric serializza le immagini come data URL (base64): un solo file portatile
         json: canvas.toJSON(FABRIC_JSON_PROPS),
         savedAt: Date.now()
@@ -2105,10 +2205,10 @@ function applyProjectPayload(payload, { resetHistory = true } = {}) {
                     updateAspectToggleUI();
 
                     if (payload.backgroundColor) {
-                        canvas.backgroundColor = payload.backgroundColor;
                         document.getElementById('bg-color').value = payload.backgroundColor;
                         document.getElementById('bg-color-icon').style.backgroundColor = payload.backgroundColor;
                     }
+                    canvas.backgroundColor = '';
 
                     if (hiRes) {
                         await importHiResMap(hiRes);
@@ -3102,10 +3202,14 @@ Object.assign(window, {
         initHistory();
     }
 
-    // Sempre centratura/zoom, anche dopo restore async
-    fitToScreen();
     applyInteractionMode();
     configureAllObjectControls();
     renderPagesUI();
+    // Layout flex a volte è pronto solo al frame successivo: centra due volte.
+    fitToScreen();
+    requestAnimationFrame(() => {
+        fitToScreen();
+        requestAnimationFrame(() => fitToScreen());
+    });
 })();
     
