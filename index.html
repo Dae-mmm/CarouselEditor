@@ -102,8 +102,9 @@
                     +
                     <span id="square-badge" class="absolute -top-1 -right-1 bg-indigo-600 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full">1</span>
                 </button>
+                </div>
 
-                <div id="floating-toolbar" class="overlay-hit absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
+                <div id="floating-toolbar" class="absolute z-50 flex gap-2 p-2 bg-white rounded-full shadow-lg border border-gray-200" style="display: none; transform: translate(-100%, calc(-100% - 12px));">
                     <div id="normal-tools" class="flex gap-1 items-center">
                         <button onclick="startCrop()" data-tooltip="Ritaglia" class="tool-btn w-10 h-10 rounded-full bg-gray-50 active:bg-gray-200 flex items-center justify-center text-lg" aria-label="Ritaglia">✂️</button>
                         <div class="w-px h-6 bg-gray-300 mx-1"></div>
@@ -116,7 +117,6 @@
                         <button onclick="applyCrop()" class="px-3 py-2 bg-green-500 text-white rounded-full font-bold text-sm" aria-label="Applica ritaglio">✓</button>
                         <button onclick="cancelCrop()" class="px-3 py-2 bg-red-500 text-white rounded-full font-bold text-sm" aria-label="Annulla ritaglio">✗</button>
                     </div>
-                </div>
                 </div>
             </div>
         </div>
