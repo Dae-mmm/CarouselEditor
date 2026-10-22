@@ -1,29 +1,22 @@
 # Carousel Maker
 
-A browser-based carousel editor for creating Instagram-style photo sequences, with drag-and-drop composition, page management, crop tools, cloud project save, and offline support.
+Carousel Maker is a browser-based editor for creating Instagram-style carousels and multi-page social media layouts. It lets you upload images, arrange them across multiple pages, crop and align them, reorder slides, and export the final result as a JPEG.
 
-## Overview
+The app is built as a Progressive Web App (PWA), so it can be installed and used offline on desktop and mobile devices.
 
-Carousel Maker is a front-end application for building social media carousels from images. Users can upload photos, arrange them across multiple pages, customize layout and background, crop images, reorder pages, and export the final result as a JPEG.
+## Highlights
 
-The app is designed to work as a Progressive Web App (PWA), so it can be installed on desktop or mobile and used offline.
-
-## Features
-
-- Upload multiple images
-- Create multi-page carousel layouts
-- Drag and drop image positioning
-- Reorder pages and manage page structure
-- Crop images directly inside the editor
-- Change page aspect ratio (portrait, square, landscape)
-- Toggle grid and snap guides for alignment
-- Adjust background color
-- Zoom in/out and fit-to-screen controls
-- Undo/redo history
-- Export the final carousel as a JPEG image
-- Save projects locally (JSON / .CMF file)
-- Cloud save with Supabase authentication and project storage
-- Offline-ready PWA support
+- Multi-page carousel canvas
+- Drag-and-drop image positioning
+- Page reordering and deletion
+- Cropping tools for individual images
+- Aspect ratio presets: 4:5, 1:1, and 1.91:1
+- Snap guides and rule grid for alignment
+- Zoom, fit-to-screen, undo/redo controls
+- Background color customization
+- Local autosave and project file export/import
+- Cloud project storage and authentication via Supabase
+- Offline-ready install flow with PWA support
 
 ## Tech Stack
 
@@ -55,83 +48,89 @@ The app is designed to work as a Progressive Web App (PWA), so it can be install
 │       ├── 001_projects.sql
 │       ├── 002_projects_aspect_ratio.sql
 │       └── 003_cloud_project_limit.sql
-└── README.md
+├── README.md
+└── manifest.webmanifest
 ```
 
-## Getting Started
+## Prerequisites
 
-### 1) Install dependencies
+- Node.js 18+
+- npm
+- A Supabase project (optional for cloud features, required for cloud save/login)
+
+## Local Setup
+
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-### 2) Configure environment variables
-
-Copy the example file:
+2. Create your environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Then set your Supabase credentials:
+3. Add your Supabase credentials to `.env`:
 
 ```env
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-### 3) Run locally
+If Supabase is not configured, the app still works in local mode, but login and cloud project features are disabled.
+
+## Run the app
 
 ```bash
 npm run dev
 ```
 
-Then open the local URL shown by Vite in the browser.
+Then open the URL shown by Vite in your browser.
 
-## Production Build
+## Production build
 
 ```bash
 npm run build
 ```
 
-To preview the production build locally:
+Preview the production build locally:
 
 ```bash
 npm run preview
 ```
 
-## Supabase Setup
+## How it works
 
-This project includes SQL migrations for cloud project storage. The database is used for:
+1. Upload one or more images.
+2. Adjust the canvas and page layout.
+3. Drag, resize, crop, and align images as needed.
+4. Reorder pages to build the final carousel flow.
+5. Export slides as JPEGs or save the project locally.
+6. Sign in with Supabase to save projects in the cloud.
 
-- saving user projects
-- storing project metadata
-- limiting cloud projects per user
-- preserving aspect ratio settings
+## Project persistence and cloud features
 
-The migration files are located in:
+The app supports several save modes:
+
+- Local autosave in browser storage
+- Project export/import as `.CMF` files
+- Cloud project storage through Supabase
+- Up to 3 cloud projects per account, enforced in the database layer
+
+The Supabase schema and related migrations are stored in:
 
 ```text
 supabase/migrations/
 ```
 
-## Usage
-
-1. Upload one or more images.
-2. Arrange them on the canvas.
-3. Add or reorder pages to build a carousel flow.
-4. Crop or align images as needed.
-5. Adjust the page format and background.
-6. Export the completed carousel.
-7. Save locally or in the cloud.
-
 ## Notes
 
-- The app is optimized for Instagram-style carousel creation.
-- It works well for image-based storytelling, product showcases, and social media content.
-- Because it is a PWA, it can be installed and used offline after the first load.
+- The app is optimized for Instagram-style storytelling and social media content creation.
+- It is designed for quick editing on both desktop and mobile devices.
+- The PWA install prompt is available once the app is loaded in a browser that supports installation.
 
 ## License
 
-This project does not currently specify an explicit license in the repository.
+This project does not currently specify a license in the repository.
